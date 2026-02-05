@@ -1,0 +1,98 @@
+#working gitlab-cli yml file, each branch seperate project in sonarqube using unique projectkey
+
+image:
+  name: sonarsource/sonar-scanner-cli:11
+  entrypoint: [""]
+
+variables:
+  SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+  DIRECTORY: "${CI_PROJECT_DIR}"
+  GIT_DEPTH: "0"
+  SONAR_MAIN_BRANCH: "main"
+
+stages:
+  - mirror
+  - build-sonar
+  - sonar-status
+
+# --------------------------------
+# STAGE 1: Run SonarQube Analysis (per-branch project key)
+# --------------------------------
+build-sonar:
+  stage: build-sonar
+  cache:
+    policy: pull-push
+    key: "sonar-cache-$CI_COMMIT_REF_SLUG"
+    paths:
+      - "${SONAR_USER_HOME}/cache"
+      - sonar-scanner/
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$SONAR_MAIN_BRANCH == "main"'
+  script:
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "$SONAR_MAIN_BRANCH" ]; then
+        PK="${CI_PROJECT_PATH_SLUG}"
+        PN="${CI_PROJECT_NAME}"
+      else
+        PK="${CI_PROJECT_PATH_SLUG}-${CI_COMMIT_REF_SLUG}"
+        PN="${CI_PROJECT_NAME} (${CI_COMMIT_REF_NAME})"
+      fi
+      echo "-------------Running SonarQube Analysis-------------"
+      echo "ProjectKey=${PK}  ProjectName=${PN}"
+      sonar-scanner \
+        -Dsonar.host.url="${SONAR_HOST_URL}" \
+        -Dsonar.login="${SONAR_TOKEN}" \
+        -Dsonar.projectKey="${PK}" \
+        -Dsonar.projectName="${PN}" \
+        -Dsonar.sources="."
+    - echo "-------------SonarQube Analysis Completed-------------"
+  artifacts:
+    paths:
+      - .scannerwork/report-task.txt
+    expire_in: 1 day
+  allow_failure: false
+
+# -----------------------------
+# STAGE 2: Poll SonarQube CE task until SUCCESS
+# -----------------------------
+sonar-status:
+  stage: sonar-status
+  image: alpine:3.20
+  needs: ["build-sonar"]
+  dependencies:
+    - build-sonar
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - echo "-------------Polling SonarQube CE task status-------------"
+    - apk add --no-cache curl jq
+    - |
+      if [ ! -f .scannerwork/report-task.txt ]; then
+        echo "-------------report-task.txt not found; cannot determine CE task URL-------------"; exit 1;
+      fi
+    - CE_TASK_URL=$(sed -n 's/^ceTaskUrl=//p' .scannerwork/report-task.txt)
+    - |
+      if [ -z "${CE_TASK_URL}" ]; then
+        echo "-------------Could not extract ceTaskUrl from report-task.txt-------------"; exit 1;
+      fi
+    - |
+      FINAL_STATUS=""
+      while true; do
+        STATUS=$(curl -s -u "${SONAR_TOKEN}:" "${CE_TASK_URL}" | jq -r '.task.status // empty');
+        if [ -z "$STATUS" ]; then
+          echo "-------------Waiting for CE task status... retrying in 3s-------------"; sleep 3; continue;
+        fi
+        case "$STATUS" in
+          PENDING) echo "PENDING..."; sleep 5;;
+          IN_PROGRESS) echo "IN_PROGRESS..."; sleep 5;;
+          SUCCESS) echo "SUCCESS"; FINAL_STATUS="SUCCESS"; break;;
+          *) echo "FINAL: $STATUS"; FINAL_STATUS="$STATUS"; break;;
+        esac
+      done
+    - |
+      if [ "$FINAL_STATUS" != "SUCCESS" ]; then
+        echo "-------------SonarQube analysis failed (status=$FINAL_STATUS)-------------"; exit 1;
+      fi
