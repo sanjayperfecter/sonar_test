@@ -2,7 +2,7 @@
 
 
 from fastapi import APIRouter
-import os  # unused import
+# import os  # unused import
 
 router = APIRouter()
 
