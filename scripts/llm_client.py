@@ -18,7 +18,7 @@ class LLMClient:
         # Azure OpenAI
         self.azure_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
         self.azure_key = os.getenv('AZURE_OPENAI_KEY')
-        self.azure_deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4')
+        self.azure_deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4.1-min')
 
         # Initialize clients
         self.anthropic = None
@@ -38,7 +38,7 @@ class LLMClient:
                 self.azure = AzureOpenAI(
                     azure_endpoint=self.azure_endpoint,
                     api_key=self.azure_key,
-                    api_version="2024-02-15-preview"
+                    api_version="2025-01-01-preview"
                 )
                 print("✅ Azure OpenAI initialized")
             except ImportError:
