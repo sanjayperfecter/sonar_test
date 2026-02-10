@@ -61,9 +61,4 @@ jobs:
             const qualityGate = '${{ steps.sonarqube-quality-gate-check.outputs.quality-gate-status }}';
             const emoji = qualityGate === 'PASSED' ? '✅' : '❌';
 
-            # github.rest.issues.createComment({
-            #   issue_number: context.issue.number,
-            #   owner: context.repo.owner,
-            #   repo: context.repo.repo,
-            #   body: `${emoji} **SonarCloud Quality Gate**: ${qualityGate}\n\nView detailed report: ${{ steps.sonarqube-quality-gate-check.outputs.project-status-url }}`
-            # });
+            
