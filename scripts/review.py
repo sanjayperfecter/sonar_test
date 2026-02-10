@@ -100,7 +100,7 @@ def main():
                 f"```\n{str(e)}\n```\n\n"
                 f"Please check the workflow logs for details."
             )
-            github.set_status("error", "AI review failed", "ai-code-review")
+            # github.set_status("error", "AI review failed", "ai-code-review")
             return 1
 
         # 7. Determine review event type
@@ -139,7 +139,7 @@ def main():
 
         try:
             github = GitHubClient()
-            github.set_status("error", "AI review encountered an error", "ai-code-review")
+            # github.set_status("error", "AI review encountered an error", "ai-code-review")
         except:
             pass
 
