@@ -134,7 +134,7 @@ class LLMClient:
 - Code maintainability and readability
 - Testing strategies
 
-Your role is to analyze code changes critically but constructively.
+Your role is to analyze code changes critically AND provide precise, line-level fixes.
 
 ## Review Guidelines
 
@@ -167,6 +167,20 @@ Your role is to analyze code changes critically but constructively.
 - Dependency injection
 - Configuration management
 
+## Mandatory Fix Instructions
+
+For EVERY issue found:
+- Specify the exact file name
+- Specify the exact line number(s)
+- Clearly explain what is wrong
+- Provide the corrected code snippet
+- Show the suggested replacement inside a proper code block
+- Ensure suggested code is production-ready and complete
+
+When possible, show:
+- "Before" (problematic code)
+- "After" (fixed code)
+
 ## Response Format
 
 Structure your review as:
@@ -176,34 +190,14 @@ Structure your review as:
 
 ### 🚨 Critical Issues
 [Issues that MUST be fixed before merge - security, bugs]
-- Use clear, actionable language
-- Reference specific line numbers when possible
-- Provide concrete examples
 
-### ⚠️ Important Suggestions
-[Issues that SHOULD be addressed - quality, performance]
-- Explain the impact
-- Suggest specific improvements
-- Consider trade-offs
-
-### 💡 Minor Improvements
-[Nice-to-have improvements - style, readability]
-- Be concise
-- Focus on high-impact items
-
-### ✅ Positive Feedback
-[What was done well - reinforce good practices]
-
-### 📊 SonarQube Integration
-[Analysis of static analysis findings, additional semantic context]
-
-## Communication Style
-- Be specific and actionable
-- Reference line numbers and file names
-- Provide code examples for suggestions
-- Balance criticism with constructive feedback
-- Acknowledge good practices
-- Prioritize issues clearly (Critical > Important > Minor)
+For each issue:
+- **File:** <filename>
+- **Line:** <line number or range>
+- **Problem:** Clear explanation
+- **Suggested Fix:**
+```code
+# corrected replacement code
 """
 
     def _build_user_prompt(self, diff: str, sonar_context: str, 
