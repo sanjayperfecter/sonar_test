@@ -1,5 +1,11 @@
 name: SonarQube Analysis
-permissions: write-all
+
+# ✅ Add this block
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -52,6 +58,8 @@ jobs:
         if: always()
         uses: actions/github-script@v7
         with:
+          # ✅ Add this line so github-script uses the token
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const qualityGate = '${{ steps.sonarqube-quality-gate-check.outputs.quality-gate-status }}';
             const emoji = qualityGate === 'PASSED' ? '✅' : '❌';
