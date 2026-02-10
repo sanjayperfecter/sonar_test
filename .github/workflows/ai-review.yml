@@ -1,0 +1,111 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  issues: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Wait for SonarQube to complete first
+  wait-for-sonar:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for SonarCloud
+        uses: fountainhead/action-wait-for-check@v1.2.0
+        id: wait-for-sonar
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          checkName: SonarCloud Scan
+          ref: ${{ github.event.pull_request.head.sha }}
+          timeoutSeconds: 600
+          intervalSeconds: 10
+        continue-on-error: true
+
+  ai-review:
+    needs: wait-for-sonar
+    if: |
+      (github.event_name == 'pull_request' && 
+       !github.event.pull_request.draft &&
+       github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'issue_comment' && 
+       contains(github.event.comment.body, '/review'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements.txt
+
+      - name: Load configuration
+        id: config
+        run: |
+          if [ -f .github/ai-review-config.yaml ]; then
+            echo "Config file found"
+            echo "config_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Using default configuration"
+            echo "config_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run AI Code Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_KEY: ${{ secrets.AZURE_OPENAI_KEY }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT || 'gpt-4' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
+          SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.repository }}
+          FULL_REVIEW: ${{ contains(github.event.comment.body, '/review-full') }}
+        run: python scripts/review.py
+
+      - name: Create check run
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const conclusion = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'AI Code Review',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: 'AI Code Review Completed',
+                summary: conclusion === 'success' 
+                  ? '✅ AI review completed successfully' 
+                  : '❌ AI review encountered errors'
+              }
+            });
