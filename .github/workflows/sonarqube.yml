@@ -1,5 +1,5 @@
 name: SonarQube Analysis
-
+permissions: write-all
 on:
   pull_request:
     types: [opened, synchronize, reopened]
