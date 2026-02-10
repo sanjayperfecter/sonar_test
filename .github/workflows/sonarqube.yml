@@ -5,7 +5,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  statuses: write
 
 on:
   pull_request:

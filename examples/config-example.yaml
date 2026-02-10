@@ -1,0 +1,95 @@
+# Example configuration for projects using the AI Code Review Agent
+
+review:
+  enabled: true
+
+  # Exclude patterns - customize for your project
+  exclude_patterns:
+    - "*.lock"
+    - "*.json"
+    - "*.md"
+    - "*.yaml"
+    - "*.yml"
+    - "node_modules/**"
+    - "vendor/**"
+    - "dist/**"
+    - "build/**"
+    - "__pycache__/**"
+    - "migrations/**"    # Database migrations often auto-generated
+    - "*.generated.*"     # Generated files
+
+  # Include only these extensions (remove this section to include all)
+  include_extensions:
+    - ".py"
+    - ".js"
+    - ".ts"
+    - ".jsx"
+    - ".tsx"
+    - ".java"
+    - ".go"
+    - ".rs"
+    - ".cpp"
+    - ".c"
+    - ".cs"
+
+  # Minimum severity for reporting
+  min_severity: "MAJOR"  # INFO, MINOR, MAJOR, CRITICAL, BLOCKER
+
+  # Maximum comments to prevent spam
+  max_comments: 20
+
+llm:
+  # Primary model - recommended: claude-sonnet-4.5
+  primary_model: "claude-sonnet-4.5"
+
+  # Fallback model
+  fallback_model: "gpt-4"
+
+  # Response length
+  max_tokens: 4096
+
+  # Creativity (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.3
+
+  # Enable prompt caching (Anthropic only)
+  enable_caching: true
+
+sonarqube:
+  # Enforce quality gate
+  enforce_quality_gate: true
+
+  # Block merge on critical issues
+  block_on_critical: true
+
+  # Include SonarQube context in AI review
+  include_in_context: true
+
+github:
+  # Post summary comment
+  post_summary: true
+
+  # Post inline comments (future feature)
+  post_inline_comments: false
+
+  # Use suggested changes syntax
+  suggest_changes: true
+
+  # Default review event
+  default_event: "COMMENT"  # APPROVE, REQUEST_CHANGES, COMMENT
+
+# Security focus areas
+security:
+  check_sql_injection: true
+  check_xss: true
+  check_auth_issues: true
+  check_secrets_exposure: true
+  check_insecure_dependencies: true
+
+# Code quality focus
+code_quality:
+  check_complexity: true
+  check_duplication: true
+  check_naming_conventions: true
+  check_error_handling: true
+  check_performance: true
+  check_best_practices: true
