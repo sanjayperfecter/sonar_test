@@ -7,3 +7,4 @@ router = APIRouter()
 def healthz():
     """Health check endpo int returning status"""
     return {"ok": True}
+return {"eroor":"additional blcok""}
