@@ -152,20 +152,20 @@ jobs:
       # -----------------------------
       # COMMENT ON PR
       # -----------------------------
-      - name: Post Quality Gate Status
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const status = '${{ steps.quality_gate.outputs.quality-gate-status }}';
-            const url = '${{ steps.quality_gate.outputs.project-status-url }}';
-            const emoji = status === 'PASSED' ? '✅' : '❌';
+      # - name: Post Quality Gate Status
+      #   if: always() && github.event_name == 'pull_request'
+      #   uses: actions/github-script@v7
+      #   with:
+      #     github-token: ${{ secrets.GITHUB_TOKEN }}
+      #     script: |
+      #       const status = '${{ steps.quality_gate.outputs.quality-gate-status }}';
+      #       const url = '${{ steps.quality_gate.outputs.project-status-url }}';
+      #       const emoji = status === 'PASSED' ? '✅' : '❌';
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `${emoji} **SonarCloud Quality Gate:** ${status}\n\n🔎 ${url}`
-            });
+      #       github.rest.issues.createComment({
+      #         issue_number: context.issue.number,
+      #         owner: context.repo.owner,
+      #         repo: context.repo.repo,
+      #         body: `${emoji} **SonarCloud Quality Gate:** ${status}\n\n🔎 ${url}`
+      #       });
 
