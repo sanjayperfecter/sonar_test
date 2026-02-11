@@ -162,10 +162,10 @@ jobs:
             const url = '${{ steps.quality_gate.outputs.project-status-url }}';
             const emoji = status === 'PASSED' ? '✅' : '❌';
 
-            # github.rest.issues.createComment({
-            #   issue_number: context.issue.number,
-            #   owner: context.repo.owner,
-            #   repo: context.repo.repo,
-            #   body: `${emoji} **SonarCloud Quality Gate:** ${status}\n\n🔎 ${url}`
-            # });
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `${emoji} **SonarCloud Quality Gate:** ${status}\n\n🔎 ${url}`
+            });
 
