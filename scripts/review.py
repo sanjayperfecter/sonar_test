@@ -255,7 +255,6 @@ from llm_client import LLMClient
 # LangChain imports
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field
 
 
@@ -278,19 +277,21 @@ class ReviewDecision(BaseModel):
 
 class ReviewEventAnalyzer:
     """LangChain-based analyzer for determining review event type"""
-    
-    def __init__(self):
-        """Initialize the LangChain analyzer"""
-        # Initialize Azure OpenAI via LangChain
-        self.llm = AzureChatOpenAI(
-            azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_KEY"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
-            deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
-            temperature=0.1,  # Low temperature for consistent decisions
-            model_kwargs={"top_p": 0.95}
-        )
-        
+
+    def __init__(self, llm):
+        """Initialize the LangChain analyzer with an injected LLM instance.
+
+        The LLM should be a LangChain-compatible chat model, typically the
+        shared AzureChatOpenAI instance provided by LLMClient.
+        """
+        if llm is None:
+            raise ValueError(
+                "Azure LangChain LLM is not configured. "
+                "Ensure Azure OpenAI is set up before initializing ReviewEventAnalyzer."
+            )
+
+        self.llm = llm
+
         # Setup output parser
         self.parser = PydanticOutputParser(pydantic_object=ReviewDecision)
         
@@ -437,10 +438,16 @@ def main():
         github = GitHubClient()
         sonar = SonarClient()
         llm = LLMClient()
-        
-        # Initialize LangChain analyzer
+
+        # Initialize LangChain analyzer using the shared Azure LLM
         print("  🔗 Initializing LangChain analyzer...")
-        review_analyzer = ReviewEventAnalyzer()
+        azure_llm = llm.get_azure_langchain_model()
+        if not azure_llm:
+            raise RuntimeError(
+                "Azure LangChain model is not configured; "
+                "cannot perform LangChain-based review decision analysis."
+            )
+        review_analyzer = ReviewEventAnalyzer(azure_llm)
 
         # Get PR information
         print("\n📋 Fetching PR information...")

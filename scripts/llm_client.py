@@ -1,27 +1,47 @@
 """
 LLM Client for AI Code Review
 Supports Claude (Anthropic) and GPT-4 (Azure OpenAI)
+
+This module centralizes Azure OpenAI configuration and exposes both
+SDK-based and LangChain-based interfaces for use throughout the codebase.
 """
 
 import os
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
 from tenacity import retry, stop_after_attempt, wait_exponential
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import AzureChatOpenAI
 
 
 class LLMClient:
     """Client for interacting with LLM providers"""
 
     def __init__(self):
+        # Load optional configuration (e.g., temperature, max_tokens)
+        self.llm_config: Dict[str, Any] = self._load_llm_config()
+
         # Anthropic Claude
         self.anthropic_key = os.getenv('ANTHROPIC_API_KEY')
 
         # Azure OpenAI
         self.azure_endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
         self.azure_key = os.getenv('AZURE_OPENAI_KEY')
+        # Keep existing env var name for backwards compatibility
         self.azure_deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4.1-min')
+        self.azure_api_version = os.getenv('AZURE_OPENAI_API_VERSION', '2025-01-01-preview')
 
         # Initialize clients
         self.anthropic = None
         self.azure = None
+
+        # Shared LangChain chat model and review chain for Azure
+        self.azure_langchain: Optional[AzureChatOpenAI] = None
+        self.review_prompt: Optional[ChatPromptTemplate] = None
+        self.review_chain = None
 
         if self.anthropic_key:
             try:
@@ -37,14 +57,125 @@ class LLMClient:
                 self.azure = AzureOpenAI(
                     azure_endpoint=self.azure_endpoint,
                     api_key=self.azure_key,
-                    api_version="2025-01-01-preview"
+                    api_version=self.azure_api_version,
                 )
-                print("✅ Azure OpenAI initialized")
+                print("✅ Azure OpenAI SDK client initialized")
             except ImportError:
                 print("⚠️  openai package not installed")
 
-        if not self.anthropic and not self.azure:
-            raise ValueError("No LLM provider configured. Set ANTHROPIC_API_KEY or AZURE_OPENAI_* variables")
+            # Initialize shared LangChain chat model for Azure
+            try:
+                temperature = (
+                    self.llm_config.get("llm", {}).get("temperature", 0.3)
+                )
+                max_tokens = (
+                    self.llm_config.get("llm", {}).get("max_tokens", 4096)
+                )
+
+                self.azure_langchain = AzureChatOpenAI(
+                    azure_endpoint=self.azure_endpoint,
+                    api_key=self.azure_key,
+                    api_version=self.azure_api_version,
+                    deployment_name=self.azure_deployment,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                print("✅ Azure OpenAI LangChain chat model initialized")
+
+                # Build the reusable LangChain review chain
+                self._init_review_chain()
+            except Exception as e:
+                # Don't fail initialization entirely if LangChain wiring has issues;
+                # the SDK client can still be used as a fallback.
+                print(f"⚠️  Failed to initialize Azure OpenAI LangChain model: {e}")
+
+        if not self.anthropic and not self.azure_langchain and not self.azure:
+            raise ValueError(
+                "No LLM provider configured. Set ANTHROPIC_API_KEY or AZURE_OPENAI_* variables"
+            )
+
+    def _load_llm_config(self) -> Dict[str, Any]:
+        """
+        Load LLM configuration from the shared ai-review-config.yaml file.
+
+        This allows central management of parameters like temperature and
+        max_tokens while keeping environment variables as the primary source
+        of provider credentials.
+        """
+        # Assume project layout with this file in scripts/, config in .github/
+        root_dir = Path(__file__).resolve().parent.parent
+        config_path = root_dir / ".github" / "ai-review-config.yaml"
+
+        if not config_path.exists():
+            return {}
+
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+                if not isinstance(data, dict):
+                    return {}
+                return data
+        except Exception as e:
+            print(f"⚠️  Failed to load LLM config from {config_path}: {e}")
+            return {}
+
+    def _init_review_chain(self) -> None:
+        """Initialize the LangChain prompt and chain for Azure-based reviews."""
+        if not self.azure_langchain:
+            return
+
+        system_prompt = self._build_system_prompt()
+
+        # The user prompt mirrors _build_user_prompt but uses template variables
+        self.review_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                (
+                    "user",
+                    """# Pull Request Review Request
+
+## PR Information
+- **Title:** {title}
+- **Author:** {author}
+- **Base Branch:** {base_branch}
+- **Files Changed:** {changed_files}
+- **Lines Changed:** {lines_changed} (+{additions} -{deletions})
+
+## PR Description
+{description}
+
+---
+
+## Code Changes (Git Diff)
+```diff
+{diff}
+```
+
+---
+
+## SonarQube Static Analysis
+{sonar_context}
+
+---
+
+{file_context}
+
+## Your Task
+Perform a comprehensive code review focusing on security, quality, and best practices.
+Provide actionable feedback structured according to the guidelines.
+""",
+                ),
+            ]
+        )
+
+        self.review_chain = self.review_prompt | self.azure_langchain | StrOutputParser()
+
+    def get_azure_langchain_model(self) -> Optional[AzureChatOpenAI]:
+        """
+        Expose the shared Azure LangChain chat model so other components
+        (e.g. ReviewEventAnalyzer) can reuse the centralized configuration.
+        """
+        return self.azure_langchain
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def review_with_claude(self, system_prompt: str, user_content: str) -> str:
@@ -86,6 +217,40 @@ class LLMClient:
 
         return response.choices[0].message.content
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def review_with_azure_langchain(
+        self,
+        diff: str,
+        sonar_context: str,
+        pr_info: dict,
+        file_context: str = "",
+    ) -> str:
+        """Call Azure OpenAI via the shared LangChain chain for code review."""
+        if not self.azure_langchain or not self.review_chain:
+            raise ValueError("Azure LangChain review chain not initialized")
+
+        print(f"🤖 Calling Azure OpenAI via LangChain ({self.azure_deployment})...")
+
+        additions = pr_info.get("additions", 0)
+        deletions = pr_info.get("deletions", 0)
+        lines_changed = additions + deletions
+
+        variables = {
+            "title": pr_info.get("title", "N/A"),
+            "author": pr_info.get("author", "Unknown"),
+            "base_branch": pr_info.get("base_branch", "unknown"),
+            "changed_files": pr_info.get("changed_files", 0),
+            "lines_changed": lines_changed,
+            "additions": additions,
+            "deletions": deletions,
+            "description": pr_info.get("description", "No description provided"),
+            "diff": diff,
+            "sonar_context": sonar_context,
+            "file_context": file_context or "",
+        }
+
+        return self.review_chain.invoke(variables)
+
     def review_code(self, diff: str, sonar_context: str, 
                    pr_info: dict, file_context: str = "") -> str:
         """Main review method with fallback logic
@@ -114,12 +279,28 @@ class LLMClient:
                 else:
                     raise
 
-        # Fallback to Azure OpenAI
+        # Prefer the centralized LangChain-based Azure path when available
+        if self.azure_langchain and self.review_chain is not None:
+            try:
+                return self.review_with_azure_langchain(
+                    diff=diff,
+                    sonar_context=sonar_context,
+                    pr_info=pr_info,
+                    file_context=file_context,
+                )
+            except Exception as e:
+                print(f"❌ Azure OpenAI via LangChain failed: {e}")
+                if self.azure:
+                    print("⚠️  Falling back to Azure OpenAI SDK client...")
+                else:
+                    raise
+
+        # Fallback to Azure OpenAI SDK client
         if self.azure:
             try:
                 return self.review_with_azure_openai(system_prompt, user_content)
             except Exception as e:
-                print(f"❌ Azure OpenAI failed: {e}")
+                print(f"❌ Azure OpenAI SDK client failed: {e}")
                 raise
 
         raise Exception("All LLM providers failed")
