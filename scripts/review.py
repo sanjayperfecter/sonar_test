@@ -421,6 +421,69 @@ Based on this information, determine the review event type with reasoning.""")
         return "\n".join(summary_lines)
 
 
+def _filter_diff_excluded_paths(diff: str) -> str:
+    """
+    Remove diff sections for files we don't want to process.
+
+    Specifically, skip:
+    - Any file under a `scripts/` folder
+    - Any file whose name contains the word 'script' (case-insensitive)
+    """
+    if not diff:
+        return diff
+
+    lines = diff.splitlines(keepends=True)
+
+    blocks = []
+    current_lines = []
+    current_file_path = None
+
+    def flush_block():
+        nonlocal current_lines, current_file_path
+        if current_lines:
+            blocks.append((current_file_path, "".join(current_lines)))
+        current_lines = []
+        current_file_path = None
+
+    for line in lines:
+        if line.startswith("diff --git "):
+            flush_block()
+            current_lines = [line]
+            current_file_path = None
+            continue
+
+        current_lines.append(line)
+
+        if current_file_path is None and line.startswith("+++ "):
+            # Example: "+++ b/path/to/file.py"
+            path = line[4:].strip()
+            if path.startswith("a/") or path.startswith("b/"):
+                path = path[2:]
+            current_file_path = path or "<unknown>"
+
+    flush_block()
+
+    def is_excluded(path: str | None) -> bool:
+        if not path or path == "<unknown>":
+            return False
+
+        normalized = path.lower()
+
+        # Skip anything under a scripts/ folder
+        if normalized.startswith("scripts/") or "/scripts/" in normalized:
+            return True
+
+        # Skip any file whose name contains 'script'
+        filename = os.path.basename(normalized)
+        if "script" in filename:
+            return True
+
+        return False
+
+    kept_blocks = [block for file_path, block in blocks if not is_excluded(file_path)]
+    return "".join(kept_blocks)
+
+
 def print_banner():
     """Print startup banner"""
     print("=" * 80)
@@ -460,6 +523,9 @@ def main():
         # Get PR diff
         print("\n📥 Fetching code changes...")
         diff = github.get_pr_diff()
+
+        # Filter out script-related files that should not be processed
+        diff = _filter_diff_excluded_paths(diff)
 
         if not diff.strip():
             print("⚠️  No reviewable code changes detected")
