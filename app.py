@@ -21,8 +21,8 @@ class UserManager:
         # Storing password in plain text - SECURITY ISSUE!
         query = f"INSERT INTO users (email, password) VALUES ('{email}', '{password}')"
         return self.db.execute(query)
-
-    # Complex method with no error handling
+ 
+    # Complex method with no error handling   s
     def update_user_profile(self, user_id, data):
         user = self.get_user(user_id)
         # No null check - potential NoneType error
