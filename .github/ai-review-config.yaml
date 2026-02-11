@@ -4,35 +4,7 @@ review:
   enabled: true
 
   # Files to exclude from review
-  exclude_patterns:
-    - "*.lock"
-    - "*.json"
-    - "*.md"
-    - "*.yaml"
-    - "*.yml"
-    - "*.txt"
-    - "test/**"
-    - "tests/**"
-    - "__pycache__/**"
-    - "*.generated.*"
-    - "dist/**"
-    - "build/**"
-    - "node_modules/**"
-    - ".github/**"
-    - "scripts/**"
-    - "tests/**"
-    - "config/**"
-    - "docs/**"
-    - "examples/**"
-    - "scripts/**"
-    - "tests/**"
-    - "config/**"
-    - "docs/**"
-    - "examples/**"
-    - "scripts/**"
-    - "**/scripts/**"
-    - "**/scripts/*.py"
-
+ 
   # File extensions to review
   include_extensions:
     - ".py"
@@ -49,6 +21,33 @@ review:
     - ".rb"
     - ".swift"
     - ".kt"
+
+  exclude_patterns:
+    - "*.lock"
+    - "*.json"
+    - "*.md"
+    - "*.yaml"
+    - "*.yml"
+    - "*.txt"
+    - "test/**"
+    - "tests/**"
+    - "__pycache__/**"
+    - "*.generated.*"
+    - "dist/**"
+    - "build/**"
+    - "node_modules/**"
+    - ".github/**"
+    - "tests/**"
+    - "config/**"
+    - "docs/**"
+    - "examples/**"
+    - "tests/**"
+    - "config/**"
+    - "docs/**"
+    - "examples/**"
+    - "scripts/**"
+    - "**/scripts/**"
+    - "**/scripts/*.py"
 
   # Minimum severity to report
   min_severity: "INFO"  # INFO, MINOR, MAJOR, CRITICAL
