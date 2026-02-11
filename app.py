@@ -5,5 +5,5 @@ router = APIRouter()
 
 @router.get("/healthz")
 def healthz():
-    """Health check endpoint returning status"""
+    """Health check endpo int returning status"""
     return {"ok": True}
