@@ -42,7 +42,7 @@ class UserManager:
     def render_user_profile(self, user_id):
         user = self.get_user(user_id)
         # Directly inserting user input into HTML - XSS risk!
-        html = f"<div><h1>{user['name']}</h1><p>{user['bio']}</p></div>"
+        html = f"<div><h1>{user['name  ']}</h1><p>{user['bio']}</p></div>"
         return html
 
     # Hardcoded credentials
