@@ -23,7 +23,7 @@ class UserRepository:
             user_id: The user's ID
 
         Returns:
-            User dictionary or None if not found
+            User dictionary or None if not found 
         """
         try:
             # Using parameterized query to prevent SQL injection
