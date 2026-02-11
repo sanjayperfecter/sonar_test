@@ -1,11 +1,86 @@
+# name: SonarQube Analysis
+
+# # ✅ Add this block
+# permissions:
+#   contents: read
+#   issues: write
+#   pull-requests: write
+#   checks: write
+
+# on:
+#   pull_request:
+#     types: [opened, synchronize, reopened]
+#   push:
+#     branches:
+#       - main
+#       - develop
+#       - master
+
+# jobs:
+#   sonarcloud:
+#     name: SonarCloud Scan
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
+#         with:
+#           fetch-depth: 0  # Shallow clones disabled for better analysis
+
+#       - name: Cache SonarCloud packages
+#         uses: actions/cache@v3
+#         with:
+#           path: ~/.sonar/cache
+#           key: ${{ runner.os }}-sonar
+#           restore-keys: ${{ runner.os }}-sonar
+
+#       - name: SonarCloud Scan
+#         uses: SonarSource/sonarqube-scan-action@v6
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+#         with:
+#           args: >
+#             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+#             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+#             -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
+#             -Dsonar.pullrequest.branch=${{ github.head_ref }}
+#             -Dsonar.pullrequest.base=${{ github.base_ref }}
+
+#       - name: Check Quality Gate
+#         id: sonarqube-quality-gate-check
+#         uses: sonarsource/sonarqube-quality-gate-action@master
+#         timeout-minutes: 5
+#         env:
+#           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+#         continue-on-error: true
+
+#       - name: Post Quality Gate Status
+#         if: always() && github.event_name == 'pull_request'
+#         uses: actions/github-script@v7
+#         with:
+#           # ✅ Add this line so github-script uses the token
+#           github-token: ${{ secrets.GITHUB_TOKEN }}
+#           script: |
+#             const qualityGate = '${{ steps.sonarqube-quality-gate-check.outputs.quality-gate-status }}';
+#             const emoji = qualityGate === 'PASSED' ? '✅' : '❌';
+
+#             github.rest.issues.createComment({
+#               issue_number: context.issue.number,
+#               owner: context.repo.owner,
+#               repo: context.repo.repo,
+#               body: `${emoji} **SonarCloud Quality Gate**: ${qualityGate}\n\nView detailed report: ${{ steps.sonarqube-quality-gate-check.outputs.project-status-url }}`
+#             });
+
+
+
 name: SonarQube Analysis
 
-# ✅ Add this block
 permissions:
   contents: read
-  issues: write
   pull-requests: write
   checks: write
+  issues: write
 
 on:
   pull_request:
@@ -25,7 +100,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Shallow clones disabled for better analysis
+          fetch-depth: 0
 
       - name: Cache SonarCloud packages
         uses: actions/cache@v3
@@ -34,7 +109,11 @@ jobs:
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
 
-      - name: SonarCloud Scan
+      # -----------------------------
+      # PR ANALYSIS (Auto-detected)
+      # -----------------------------
+      - name: SonarCloud Scan (Pull Request)
+        if: github.event_name == 'pull_request'
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -43,31 +122,50 @@ jobs:
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
-            -Dsonar.pullrequest.branch=${{ github.head_ref }}
-            -Dsonar.pullrequest.base=${{ github.base_ref }}
 
+      # -----------------------------
+      # BRANCH ANALYSIS (Push builds)
+      # -----------------------------
+      - name: SonarCloud Scan (Branch)
+        if: github.event_name == 'push'
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.branch.name=${{ github.ref_name }}
+
+      # -----------------------------
+      # QUALITY GATE CHECK
+      # -----------------------------
       - name: Check Quality Gate
-        id: sonarqube-quality-gate-check
-        uses: sonarsource/sonarqube-quality-gate-action@master
+        id: quality_gate
+        if: always()
+        uses: sonarsource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         continue-on-error: true
 
+      # -----------------------------
+      # COMMENT ON PR
+      # -----------------------------
       - name: Post Quality Gate Status
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
-          # ✅ Add this line so github-script uses the token
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const qualityGate = '${{ steps.sonarqube-quality-gate-check.outputs.quality-gate-status }}';
-            const emoji = qualityGate === 'PASSED' ? '✅' : '❌';
+            const status = '${{ steps.quality_gate.outputs.quality-gate-status }}';
+            const url = '${{ steps.quality_gate.outputs.project-status-url }}';
+            const emoji = status === 'PASSED' ? '✅' : '❌';
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `${emoji} **SonarCloud Quality Gate**: ${qualityGate}\n\nView detailed report: ${{ steps.sonarqube-quality-gate-check.outputs.project-status-url }}`
+              body: `${emoji} **SonarCloud Quality Gate:** ${status}\n\n🔎 ${url}`
             });
+
