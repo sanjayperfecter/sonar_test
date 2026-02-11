@@ -284,8 +284,8 @@ class ReviewEventAnalyzer:
         # Initialize Azure OpenAI via LangChain
         self.llm = AzureChatOpenAI(
             azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview"),
+            api_key=os.getenv("AZURE_OPENAI_KEY"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview"),
             deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME"),
             temperature=0.1,  # Low temperature for consistent decisions
             model_kwargs={"top_p": 0.95}
