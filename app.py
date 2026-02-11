@@ -1,4 +1,4 @@
-"""sdfbd"""
+
 
 
 from fastapi import APIRouter
@@ -8,6 +8,5 @@ router = APIRouter()
 
 @router.get("/healthz")
 def healthz():
-    """dfb"""
+    """Health check endpoint returning status"""
     return {"ok": True}
-return ?lkjhg vcxz""  cdvbn
