@@ -5,7 +5,7 @@ This file contains intentional security and quality issues
 
 # Missing imports
 # No type hints
-# No docstrings
+# No docstrings bad code
 
 class UserManager:
     def __init__(self, db):
