@@ -50,7 +50,7 @@ review:
     - "**/scripts/*.py"
 
   # Minimum severity to report
-  min_severity: "INFO"  # INFO, MINOR, MAJOR, CRITICAL
+  min_severity: "MINOR"  # INFO, MINOR, MAJOR, CRITICAL
 
   # Maximum number of comments per PR
   max_comments: 20
