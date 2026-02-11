@@ -29,7 +29,7 @@ def main():
     
 
     try:
-        return 0
+        # return 0
         # 1. Initialize clients
         print("\n📦 Initializing clients...")
         github = GitHubClient()
