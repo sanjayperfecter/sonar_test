@@ -1,6 +1,3 @@
-
-
-
 from fastapi import APIRouter
 # import os  # unused import
 
