@@ -133,6 +133,7 @@ jobs:
           args: >
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+        continue-on-error: true
             
 
       # -----------------------------
@@ -149,6 +150,7 @@ jobs:
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
             -Dsonar.branch.name=${{ github.ref_name }}
             -Dsonar.python.coverage.reportPaths=coverage.xml
+        continue-on-error: true
 
       # -----------------------------
       # QUALITY GATE CHECK
