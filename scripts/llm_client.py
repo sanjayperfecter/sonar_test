@@ -186,6 +186,9 @@ class LLMClient:
         self.review_prompt: Optional[ChatPromptTemplate] = None
         self.review_chain = None
 
+        # Dedicated LangChain chat model for structured review (higher max_tokens)
+        self.azure_langchain_structured: Optional[AzureChatOpenAI] = None
+
         # Structured review chain (returns ReviewWithSuggestions)
         self.structured_review_prompt: Optional[ChatPromptTemplate] = None
         self.structured_review_chain = None
@@ -231,6 +234,24 @@ class LLMClient:
                     max_tokens=max_tokens,
                 )
                 print("✅ Azure OpenAI LangChain chat model initialized")
+
+                # Dedicated instance for structured review with higher
+                # max_tokens so the JSON output (summary + all inline
+                # suggestions) does not get truncated.
+                max_tokens_structured = self._safe_int(
+                    llm_section.get("max_tokens_structured"),
+                    default=max(max_tokens * 2, 8192),
+                )
+                self.azure_langchain_structured = AzureChatOpenAI(
+                    azure_endpoint=self.azure_endpoint,
+                    api_key=self.azure_key,
+                    api_version=self.azure_api_version,
+                    deployment_name=self.azure_deployment,
+                    temperature=temperature,
+                    max_tokens=max_tokens_structured,
+                )
+                print(f"✅ Azure OpenAI LangChain structured model initialized "
+                      f"(max_tokens={max_tokens_structured})")
 
                 # Build the reusable LangChain review chains
                 self._init_review_chain()
@@ -332,8 +353,15 @@ Provide actionable feedback structured according to the guidelines.
 
     def _init_structured_review_chain(self) -> None:
         """Initialize the LangChain chain that returns structured output
-        (ReviewWithSuggestions) for inline suggestions."""
-        if not self.azure_langchain:
+        (ReviewWithSuggestions) for inline suggestions.
+
+        Uses the dedicated ``azure_langchain_structured`` model which has a
+        higher ``max_tokens`` limit so the full JSON (summary + ALL inline
+        suggestions) is not truncated.
+        """
+        # Prefer the dedicated structured model; fall back to the shared one
+        llm_for_structured = self.azure_langchain_structured or self.azure_langchain
+        if not llm_for_structured:
             return
 
         system_prompt = self._build_structured_system_prompt()
@@ -376,10 +404,12 @@ number in the new version of the file. Use these exact numbers in your
 {file_context}
 
 ## Your Task
-1. Perform a comprehensive code review focusing on security, quality, and best practices.
+1. Analyze the code changes for ALL security, quality, and best-practice issues.
 2. Return your response as valid JSON matching the schema above.
-   - ``summary``: full review text in markdown.
-   - ``inline_suggestions``: list of specific issues with file_path, line, message, and optionally suggested_code.
+   - ``summary``: concise overview of the review (3-5 sentences).
+   - ``inline_suggestions``: one entry for EVERY issue found, with file_path, line, message, and optionally suggested_code.
+
+IMPORTANT: The detailed per-issue feedback belongs in ``inline_suggestions``, NOT in the summary. Keep the summary short.
 
 {format_instructions}
 """,
@@ -388,74 +418,91 @@ number in the new version of the file. Use these exact numbers in your
         )
 
         self.structured_review_chain = (
-            self.structured_review_prompt | self.azure_langchain | self.structured_parser
+            self.structured_review_prompt | llm_for_structured | self.structured_parser
         )
 
     def _build_structured_system_prompt(self) -> str:
         """Build the system prompt used by the structured review chain."""
-        return """You are an expert code reviewer with deep knowledge of:
-- Software engineering best practices and design patterns
-- Security vulnerabilities (OWASP Top 10, CWE)
-- Performance optimization
-- Code maintainability and readability
-- Testing strategies
+        return """You are an expert code reviewer. Your job is to find ALL issues in the code changes and report each one as an inline suggestion.
 
-Your role is to analyze code changes critically AND provide precise, line-level fixes.
-
-## Review Guidelines
+## What to look for
 
 **Security (Highest Priority)**
 - SQL injection, XSS, CSRF vulnerabilities
 - Authentication and authorization flaws
-- Sensitive data exposure (API keys, passwords, tokens)
+- Sensitive data exposure (API keys, passwords, tokens, hardcoded credentials)
 - Insecure dependencies
 - Input validation and sanitization
+- Plaintext password storage
 
 **Code Quality**
 - Logic errors and edge cases
 - Error handling and exception management
-- Code complexity (cyclomatic complexity)
+- Null/None checks missing
 - Code duplication (DRY principle)
 - Naming conventions and readability
-- Function/method length and single responsibility
 
 **Performance**
-- Algorithmic complexity (O(n) analysis)
-- Database query optimization (N+1 queries)
+- Database query optimization (N+1 queries, repeated queries)
 - Memory leaks and resource management
-- Unnecessary computations in loops
-- Caching opportunities
+- Unnecessary computations
 
 **Best Practices**
 - SOLID principles
-- Design patterns appropriate usage
 - Separation of concerns
-- Dependency injection
-- Configuration management
+- Type hints and documentation
 
 ## Output Format
 
-You MUST return your response as valid JSON matching the provided schema.
+You MUST return valid JSON matching the provided schema. The JSON has two fields:
 
-### summary field
-Write a full markdown code review including:
-- A 1-2 sentence overall assessment
-- Critical issues (security, bugs)
-- Suggested improvements
-- Positive aspects
+### 1. ``inline_suggestions`` (MOST IMPORTANT)
 
-### inline_suggestions field
-For EVERY actionable issue you find, add an entry to ``inline_suggestions``:
-- ``file_path``: the exact relative path from the diff header (e.g. ``src/app/main.py``)
+This is the primary output. Create one entry for EVERY issue you find in the diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
+
+For each entry provide:
+- ``file_path``: the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
 - ``line``: the line number from the ``# L<number>`` annotation in the diff. Use the EXACT number shown after ``# L``.
-- ``message``: clear explanation of what is wrong and why
-- ``suggested_code``: (optional) the corrected replacement code for that line. Only the replacement content, no diff markers. If you cannot provide a concrete fix, set to null.
+- ``message``: clear explanation of what is wrong, why it matters, and how to fix it
+- ``suggested_code``: the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, set to null.
 
-IMPORTANT:
-- Only reference lines that appear in the diff (added or context lines with # L markers).
-- Use the exact file_path as shown in the diff File: header or +++ header.
-- Do NOT invent line numbers. Only use numbers from # L markers.
-- Keep inline_suggestions focused: max 25 suggestions, prioritize critical/high-severity issues.
+Rules:
+- Only reference lines that have ``# L`` markers in the annotated diff.
+- Use the exact ``file_path`` as shown in the diff header.
+- Do NOT invent line numbers. Only use numbers from ``# L`` markers.
+- Create a SEPARATE suggestion for EACH problematic line, even if they share the same category (e.g. multiple SQL injections on different lines each get their own entry).
+- Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity.
+
+### 2. ``summary``
+
+A SHORT overview of the review (3-5 sentences max). Include:
+- Overall assessment (e.g. "This PR has N critical security issues that must be fixed.")
+- Counts of issues by category
+- One-line recommendation
+
+Do NOT repeat the detailed per-issue explanations here. The details belong in ``inline_suggestions``. Keep the summary concise to save tokens for the inline suggestions.
+
+## Example output structure
+
+```json
+{
+  "summary": "This PR introduces 5 critical security vulnerabilities...",
+  "inline_suggestions": [
+    {
+      "file_path": "src/app.py",
+      "line": 17,
+      "message": "SQL injection: user input is interpolated directly into the query string...",
+      "suggested_code": "query = \\"SELECT * FROM users WHERE id = %s\\""
+    },
+    {
+      "file_path": "src/app.py",
+      "line": 23,
+      "message": "Another SQL injection plus plaintext password storage...",
+      "suggested_code": null
+    }
+  ]
+}
+```
 """
 
     def get_azure_langchain_model(self) -> Optional[AzureChatOpenAI]:
@@ -1036,8 +1083,8 @@ IMPORTANT:
         # Annotate diff with line numbers for the LLM
         annotated_diff = annotate_diff_with_line_numbers(diff)
 
-        # Try structured chain (Azure LangChain)
-        if self.azure_langchain and self.structured_review_chain is not None:
+        # Try structured chain (Azure LangChain – dedicated or shared model)
+        if (self.azure_langchain_structured or self.azure_langchain) and self.structured_review_chain is not None:
             try:
                 return self._invoke_structured_review(
                     annotated_diff, sonar_context, pr_info, file_context
@@ -1067,7 +1114,7 @@ IMPORTANT:
         file_context: str = "",
     ) -> ReviewWithSuggestions:
         """Invoke the structured review chain and return parsed output."""
-        if not self.azure_langchain or not self.structured_review_chain:
+        if not self.structured_review_chain:
             raise ValueError("Structured review chain not initialized")
 
         print(f"🤖 Calling Azure OpenAI via LangChain for structured review "
