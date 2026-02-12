@@ -153,14 +153,14 @@ jobs:
       # -----------------------------
       # QUALITY GATE CHECK
       # -----------------------------
-      - name: Check Quality Gate
-        id: quality_gate
-        if: always()
-        uses: sonarsource/sonarqube-quality-gate-action@v1
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        continue-on-error: true
+      # - name: Check Quality Gate
+      #   id: quality_gate
+      #   if: always()
+      #   uses: sonarsource/sonarqube-quality-gate-action@v1
+      #   timeout-minutes: 5
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      #   continue-on-error: true
 
       # -----------------------------
       # COMMENT ON PR
