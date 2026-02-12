@@ -13,7 +13,7 @@ class UserManager:
 
     # SQL Injection vulnerability
     def get_user(self, user_id):
-        query = f"SELECT * FROM users WHERE id = {user_id}"  # VULNERABLE!
+        query = f"SELECT *  FROM users WHERE id = {user_id}"  # VULNERABLE!
         return self.db.execute(query)
 
     # No input validation
