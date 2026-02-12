@@ -260,7 +260,6 @@ def main():
     print_banner()
     
     try:
-        return 0
         # Initialize clients
         print("\n📦 Initializing clients...")
         github = GitHubClient()
