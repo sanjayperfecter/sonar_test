@@ -1,72 +1,52 @@
 """
-Example: Well-written Python code
-This file demonstrates good coding practices
+Example: Code with issues for AI review to catch
+This file contains intentional security and quality issues
 """
 
-from typing import List, Optional, Dict
-import logging
+# Missing imports
+# No type hints
+# No docstrings
 
-logger = logging.getLogger(__name__)
+class UserManager:
+    def __init__(self, db):
+        self.db = db
 
+    # SQL Injection vulnerability
+    def get_user(self, user_id):
+        query = f"SELECT * FROM users WHERE id = {user_id}"  # VULNERABLE!
+        return self.db.execute(query)
 
-class UserRepository:
-    """Repository for user data operations"""
+    # No input validation
+    def create_user(self, email, password):
+        # Storing password in plain text - SECURITY ISSUE!
+        query = f"INSERT INTO users (email, password) VALUES ('{email}', '{password}')"
+        return self.db.execute(query)
 
-    def __init__(self, connection):
-        self.connection = connection
+    # Complex method with no error handling
+    def update_user_profile(self, user_id, data):
+        user = self.get_user(user_id)
+        # No null check - potential NoneType error
+        user['email'] = data['email']
+        user['name'] = data['name']
+        user['age'] = data['age']
+        user['address'] = data['address']
+        user['phone'] = data['phone']
+        # Repeating code
+        self.db.execute(f"UPDATE users SET email='{user['email']}' WHERE id={user_id}")
+        self.db.execute(f"UPDATE users SET name='{user['name']}' WHERE id={user_id}")
+        self.db.execute(f"UPDATE users SET age='{user['age']}' WHERE id={user_id}")
+        # No validation, no error handling
+        return True
 
-    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
-        """
-        Safely retrieve user by ID using parameterized query
+    # XSS vulnerability
+    def render_user_profile(self, user_id):
+        user = self.get_user(user_id)
+        # Directly inserting user input into HTML - XSS risk!
+        html = f"<div><h1>{user['name']}</h1><p>{user['bio']}</p></div>"
+        return html
 
-        Args:
-            user_id: The user's ID
-
-        Returns:
-            User dictionary or None if not found 
-        """
-        try:
-            # Using parameterized query to prevent SQL injection
-            query = "SELECT * FROM users WHERE id = ?"
-            result = self.connection.execute(query, (user_id,))
-            return result.fetchone()
-        except Exception as e:
-            logger.error(f"Error fetching user {user_id}: {e}")
-            return None
-
-    def create_user(self, email: str, name: str) -> Optional[int]:
-        """
-        Create a new user with validation
-
-        Args:
-            email: User's email address
-            name: User's full name
-
-        Returns:
-            New user ID or None if creation failed
-        """
-        # Input validation
-        if not self._validate_email(email):
-            logger.warning(f"Invalid email format: {email}")
-            return None
-
-        if not name or len(name) < 2:
-            logger.warning("Invalid name provided")
-            return None
-
-        try:
-            query = "INSERT INTO users (email, name) VALUES (?, ?)"
-            cursor = self.connection.execute(query, (email, name))
-            self.connection.commit()
-            return cursor.lastrowid
-        except Exception as e:
-            logger.error(f"Error creating user: {e}")
-            self.connection.rollback()
-            return None
-
-    @staticmethod
-    def _validate_email(email: str) -> bool:
-        """Validate email format"""
-        import re
-        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        return bool(re.match(pattern, email))
+    # Hardcoded credentials
+    def connect_to_api(self):
+        api_key = "sk-1234567890abcdef"  # NEVER DO THIS!
+        api_secret = "secret123"  # SECURITY ISSUE!
+        return f"https://api.example.com?key={api_key}&secret={api_secret}"
