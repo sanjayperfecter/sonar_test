@@ -107,6 +107,17 @@ github:
   # Review event type (COMMENT, REQUEST_CHANGES, APPROVE)
   default_event: "COMMENT"
 
+  # Auto-request human reviewers after the bot posts its review
+  # Note: this requests review; it cannot force an approval.
+  request_reviewers:
+    enabled: false
+    # GitHub usernames to request review from (logins)
+    users: []
+    # GitHub team slugs to request review from (org repos only)
+    teams: []
+    # When to request reviewers: "always" | "REQUEST_CHANGES" | "APPROVE"
+    when: "always"
+
 security:
   # Focus areas for security review
   check_sql_injection: true

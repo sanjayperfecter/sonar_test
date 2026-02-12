@@ -293,6 +293,56 @@ class GitHubClient:
             print(f"❌ Unexpected error posting review with comments: {e}")
             self.post_review_summary(body, event)
 
+    def request_reviewers(
+        self,
+        users: Optional[List[str]] = None,
+        teams: Optional[List[str]] = None,
+    ) -> None:
+        """Request review from specific users and/or teams.
+
+        Notes:
+        - This adds entries under GitHub's "Requested reviewers".
+        - It does not force/auto-approve; humans still must approve.
+        - Team review requests only work for org repos with appropriate permissions.
+        """
+        users = [u for u in (users or []) if u]
+        teams = [t for t in (teams or []) if t]
+
+        if not users and not teams:
+            return
+
+        try:
+            self.pr.create_review_request(reviewers=users, team_reviewers=teams)
+            who = []
+            if users:
+                who.append(f"users={users}")
+            if teams:
+                who.append(f"teams={teams}")
+            print(f"✅ Requested review ({', '.join(who)})")
+        except GithubException as e:
+            # Common case: already requested / invalid reviewer / insufficient perms
+            print(f"⚠️  Could not request reviewers: {e}")
+        except Exception as e:
+            print(f"⚠️  Unexpected error requesting reviewers: {e}")
+
+    def maybe_request_reviewers(self, event_type: str) -> None:
+        """Request human reviewers based on .github/ai-review-config.yaml settings."""
+        cfg = (self.config or {}).get("github", {}).get("request_reviewers", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+
+        when = str(cfg.get("when", "always")).upper()
+        if when not in {"ALWAYS", "REQUEST_CHANGES", "APPROVE"}:
+            when = "ALWAYS"
+
+        event_type_norm = str(event_type or "").upper()
+        if when != "ALWAYS" and event_type_norm != when:
+            return
+
+        users = cfg.get("users", []) or []
+        teams = cfg.get("teams", []) or []
+        self.request_reviewers(users=users, teams=teams)
+
     def create_suggested_change(self, path: str, line: int, 
                                 old_code: str, new_code: str, 
                                 explanation: str):

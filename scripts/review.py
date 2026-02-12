@@ -414,6 +414,12 @@ def main():
         else:
             github.post_review_summary(summary, decision.event_type)
 
+        # Request a human reviewer (admin) if configured
+        try:
+            github.maybe_request_reviewers(decision.event_type)
+        except Exception as e:
+            print(f"⚠️  Failed to request reviewers: {e}")
+
         # Set final status
         if decision.event_type == "APPROVE":
             github.set_status("success", "✅ AI review: Approved", "ai-code-review")
