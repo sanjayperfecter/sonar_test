@@ -128,8 +128,10 @@ class TestReviewWorkflow:
             "Test review",
             "✅ Quality Gate: PASSED",
             0,
-            pr_info
+            pr_info,
+            "APPROVE"
         )
+
 
         assert "Test review" in summary
         assert "Files Changed: 3" in summary

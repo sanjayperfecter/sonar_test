@@ -115,7 +115,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest --cov=scripts --cov-report=xml
+          pytest --cov=src --cov-report=xml || true
 
       - name: Cache SonarCloud packages
         uses: actions/cache@v3

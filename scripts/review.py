@@ -431,6 +431,18 @@ def format_review_summary(review_text: str, quality_gate_text: str,
 
     return summary
 
+def determine_review_event(review_text, issues, pr_info):
+    review_text_lower = review_text.lower()
+
+    if "critical" in review_text_lower or "vulnerability" in review_text_lower:
+        return "REQUEST_CHANGES"
+
+    if "looks good" in review_text_lower or "no issues" in review_text_lower:
+        return "APPROVE"
+
+    return "COMMENT"
+
+
 
 if __name__ == "__main__":
     sys.exit(main())
