@@ -70,8 +70,13 @@ llm:
   # Fallback model
   fallback_model: "gpt-4"
 
-  # Maximum tokens for response
+  # Maximum tokens for response (plain review)
   max_tokens: 4096
+
+  # Maximum tokens for structured review (summary + inline suggestions JSON).
+  # Needs to be higher than max_tokens because the structured output includes
+  # both the review summary and all inline suggestions in a single JSON response.
+  max_tokens_structured: 8192
 
   # Temperature (0.0 = deterministic, 1.0 = creative)
   temperature: 0.3
@@ -101,6 +106,17 @@ github:
 
   # Review event type (COMMENT, REQUEST_CHANGES, APPROVE)
   default_event: "COMMENT"
+
+  # Auto-request human reviewers after the bot posts its review
+  # Note: this requests review; it cannot force an approval.
+  request_reviewers:
+    enabled: false
+    # GitHub usernames to request review from (logins)
+    users: ["Sanjay0348"]
+    # GitHub team slugs to request review from (org repos only)
+    teams: []
+    # When to request reviewers: "always" | "REQUEST_CHANGES" | "APPROVE"
+    when: "always"
 
 security:
   # Focus areas for security review

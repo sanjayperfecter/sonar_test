@@ -9,14 +9,142 @@ and prioritizing them before calling the LLM.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser, PydanticOutputParser
 from langchain_openai import AzureChatOpenAI
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for structured review output
+# ---------------------------------------------------------------------------
+
+class InlineSuggestion(BaseModel):
+    """A single inline suggestion to post on a specific line in the PR diff."""
+    file_path: str = Field(
+        description="Relative file path exactly as shown in the diff header (e.g. 'src/app/main.py')"
+    )
+    line: int = Field(
+        description="Line number in the NEW version of the file (from the #L marker in the annotated diff)"
+    )
+    message: str = Field(
+        description="Clear explanation of what is wrong and why it should be changed"
+    )
+    suggested_code: Optional[str] = Field(
+        default=None,
+        description=(
+            "The corrected replacement code for that single line (or small block). "
+            "If you can provide a concrete fix, include it here. "
+            "If no concrete fix is possible, leave as null."
+        ),
+    )
+
+
+class ReviewWithSuggestions(BaseModel):
+    """Structured output containing both the review summary and inline suggestions."""
+    summary: str = Field(
+        description=(
+            "The full code review text in markdown, including Summary, "
+            "Critical Issues, Improvements, and Positive Aspects sections."
+        )
+    )
+    inline_suggestions: List[InlineSuggestion] = Field(
+        default_factory=list,
+        description=(
+            "List of inline suggestions to post as review comments on specific "
+            "lines in the PR diff. Each suggestion targets a specific file and line."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Diff annotation helper
+# ---------------------------------------------------------------------------
+
+def annotate_diff_with_line_numbers(diff: str) -> str:
+    """Annotate added/context lines in a unified diff with their new-file line numbers.
+
+    For every ``+`` (added) line and `` `` (context) line inside a hunk, this
+    appends a ``  # L{n}`` marker so the LLM can reference exact line numbers
+    when producing inline suggestions.
+
+    Hunk headers (``@@ ... @@``), removed lines (``-``), and file-level
+    metadata lines are left untouched.
+
+    The function also handles the custom diff format used by ``get_pr_diff``
+    in ``github_api.py`` which uses ``=====`` separators and ``File: path``
+    headers instead of ``diff --git`` markers.
+    """
+    if not diff:
+        return diff
+
+    annotated_lines: List[str] = []
+    new_line_number: int = 0  # tracks current line in new file
+    current_file: Optional[str] = None
+
+    for raw_line in diff.splitlines(keepends=True):
+        line = raw_line.rstrip("\n\r")
+
+        # Detect file header in custom format: "File: path/to/file.py"
+        if line.startswith("File: "):
+            current_file = line[6:].strip()
+            new_line_number = 0
+            annotated_lines.append(raw_line)
+            continue
+
+        # Standard git diff header
+        if line.startswith("diff --git "):
+            current_file = None
+            new_line_number = 0
+            annotated_lines.append(raw_line)
+            continue
+
+        # +++ header – extract file path
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            current_file = path
+            annotated_lines.append(raw_line)
+            continue
+
+        # --- header
+        if line.startswith("--- "):
+            annotated_lines.append(raw_line)
+            continue
+
+        # Hunk header: @@ -a,b +c,d @@
+        hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", line)
+        if hunk_match:
+            new_line_number = int(hunk_match.group(1))
+            annotated_lines.append(raw_line)
+            continue
+
+        # Added line
+        if line.startswith("+"):
+            annotated_lines.append(f"{line}  # L{new_line_number}\n")
+            new_line_number += 1
+            continue
+
+        # Removed line – does not affect new-file line numbering
+        if line.startswith("-"):
+            annotated_lines.append(raw_line)
+            continue
+
+        # Context line (unchanged)
+        if current_file and new_line_number > 0:
+            annotated_lines.append(f"{line}  # L{new_line_number}\n")
+            new_line_number += 1
+        else:
+            annotated_lines.append(raw_line)
+
+    return "".join(annotated_lines)
 
 
 class LLMClient:
@@ -58,6 +186,16 @@ class LLMClient:
         self.review_prompt: Optional[ChatPromptTemplate] = None
         self.review_chain = None
 
+        # Dedicated LangChain chat model for structured review (higher max_tokens)
+        self.azure_langchain_structured: Optional[AzureChatOpenAI] = None
+
+        # Structured review chain (returns ReviewWithSuggestions)
+        self.structured_review_prompt: Optional[ChatPromptTemplate] = None
+        self.structured_review_chain = None
+        self.structured_parser = PydanticOutputParser(
+            pydantic_object=ReviewWithSuggestions
+        )
+
         if self.anthropic_key:
             try:
                 from anthropic import Anthropic
@@ -97,8 +235,27 @@ class LLMClient:
                 )
                 print("✅ Azure OpenAI LangChain chat model initialized")
 
-                # Build the reusable LangChain review chain
+                # Dedicated instance for structured review with higher
+                # max_tokens so the JSON output (summary + all inline
+                # suggestions) does not get truncated.
+                max_tokens_structured = self._safe_int(
+                    llm_section.get("max_tokens_structured"),
+                    default=max(max_tokens * 2, 8192),
+                )
+                self.azure_langchain_structured = AzureChatOpenAI(
+                    azure_endpoint=self.azure_endpoint,
+                    api_key=self.azure_key,
+                    api_version=self.azure_api_version,
+                    deployment_name=self.azure_deployment,
+                    temperature=temperature,
+                    max_tokens=max_tokens_structured,
+                )
+                print(f"✅ Azure OpenAI LangChain structured model initialized "
+                      f"(max_tokens={max_tokens_structured})")
+
+                # Build the reusable LangChain review chains
                 self._init_review_chain()
+                self._init_structured_review_chain()
             except Exception as e:
                 # Don't fail initialization entirely if LangChain wiring has issues;
                 # the SDK client can still be used as a fallback.
@@ -193,6 +350,178 @@ Provide actionable feedback structured according to the guidelines.
         )
 
         self.review_chain = self.review_prompt | self.azure_langchain | StrOutputParser()
+
+    def _init_structured_review_chain(self) -> None:
+        """Initialize the LangChain chain that returns structured output
+        (ReviewWithSuggestions) for inline suggestions.
+
+        Uses the dedicated ``azure_langchain_structured`` model which has a
+        higher ``max_tokens`` limit so the full JSON (summary + ALL inline
+        suggestions) is not truncated.
+        """
+        # Prefer the dedicated structured model; fall back to the shared one
+        llm_for_structured = self.azure_langchain_structured or self.azure_langchain
+        if not llm_for_structured:
+            return
+
+        system_prompt = self._build_structured_system_prompt()
+
+        self.structured_review_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                (
+                    "user",
+                    """# Pull Request Review Request
+
+## PR Information
+- **Title:** {title}
+- **Author:** {author}
+- **Base Branch:** {base_branch}
+- **Files Changed:** {changed_files}
+- **Lines Changed:** {lines_changed} (+{additions} -{deletions})
+
+## PR Description
+{description}
+
+---
+
+## Full File Content (for summary context)
+Below is the COMPLETE source code of each changed file, with line numbers.
+Use this for context when writing the summary. The summary should cover issues found anywhere in the file.
+
+{file_context}
+
+---
+
+## Code Changes (Annotated Diff with Line Numbers)
+This shows ONLY the lines that were changed in this PR. Each added or context
+line is annotated with ``# L<number>``. Inline suggestions MUST use these
+exact ``# L`` line numbers, because GitHub can only display comments on lines
+that appear in the diff.
+
+```diff
+{diff}
+```
+
+---
+
+## SonarQube Static Analysis
+{sonar_context}
+
+---
+
+## Your Task
+1. Scan the diff for issues to create inline suggestions. Use the full file content to write a comprehensive summary.
+2. Return your response as valid JSON matching the schema above.
+   - ``inline_suggestions``: one entry for EVERY issue found in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number. Do NOT create inline suggestions for code that only appears in the full file content.
+   - ``summary``: report ALL issues found anywhere in the file (including lines NOT in the diff). Be concise (3-8 sentences).
+3. If an issue exists in the file but its line does NOT appear in the diff, mention it in the ``summary`` only — do NOT create an inline_suggestion for it (GitHub cannot display it).
+
+IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary covers the entire file.
+
+{format_instructions}
+""",
+                ),
+            ]
+        )
+
+        self.structured_review_chain = (
+            self.structured_review_prompt | llm_for_structured | self.structured_parser
+        )
+
+    def _build_structured_system_prompt(self) -> str:
+        """Build the system prompt used by the structured review chain."""
+        return """You are an expert code reviewer. You will receive TWO inputs for each changed file:
+
+1. **Full File Content** -- the complete source code with line numbers. Use this ONLY for writing the summary.
+2. **Annotated Diff** -- only the changed lines, annotated with ``# L<number>`` markers. Scan this for issues to create inline suggestions.
+
+Your job is to scan the diff for issues to create inline suggestions, and use the full file content to write a comprehensive summary.
+
+## What to look for
+
+**Security (Highest Priority)**
+- SQL injection, XSS, CSRF vulnerabilities
+- Authentication and authorization flaws
+- Sensitive data exposure (API keys, passwords, tokens, hardcoded credentials)
+- Insecure dependencies
+- Input validation and sanitization
+- Plaintext password storage
+
+**Code Quality**
+- Logic errors and edge cases
+- Error handling and exception management
+- Null/None checks missing
+- Code duplication (DRY principle)
+- Naming conventions and readability
+
+**Performance**
+- Database query optimization (N+1 queries, repeated queries)
+- Memory leaks and resource management
+- Unnecessary computations
+
+**Best Practices**
+- SOLID principles
+- Separation of concerns
+- Type hints and documentation
+
+## Output Format
+
+You MUST return valid JSON matching the provided schema. The JSON has two fields:
+
+### 1. ``inline_suggestions`` (MOST IMPORTANT -- based on DIFF ONLY)
+
+Scan the annotated diff for issues. Create one entry for EVERY issue you find in the diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
+
+Only analyze and create suggestions for issues found in the annotated diff lines. Do NOT create inline suggestions for code that is only visible in the full file content.
+
+For each entry provide:
+- ``file_path``: the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
+- ``line``: the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
+- ``message``: clear explanation of what is wrong, why it matters, and how to fix it
+- ``suggested_code``: the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, set to null.
+
+Rules:
+- ONLY use line numbers from ``# L`` markers in the annotated diff section.
+- ONLY create suggestions for issues found in the diff lines.
+- Use the exact ``file_path`` as shown in the diff header.
+- Do NOT invent line numbers. Only use numbers from ``# L`` markers.
+- Create a SEPARATE suggestion for EACH problematic line, even if they share the same category (e.g. multiple SQL injections on different lines each get their own entry).
+- Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity.
+
+### 2. ``summary`` (based on FULL FILE CONTENT)
+
+Use the full file content to write a comprehensive overview (3-8 sentences). Include:
+- Overall assessment of the entire file (e.g. "This file has N critical security issues.")
+- ALL issues found anywhere in the file, including those on lines NOT in the diff
+- For issues outside the diff, briefly describe them here since they cannot have inline comments
+- Counts of issues by category
+- Recommendation
+
+The ``summary`` is the place to report issues from the entire file. Issues that are only in the full file content (not in the diff) should be described here.
+
+## Example output structure
+
+```json
+{
+  "summary": "This file contains 6 critical issues: 3 SQL injections (lines 17, 23, 36-38), XSS vulnerability (line 46), hardcoded credentials (lines 51-53), and missing error handling throughout. Lines 36-38 and 51-53 are not in the current diff but contain serious vulnerabilities that should be addressed.",
+  "inline_suggestions": [
+    {
+      "file_path": "src/app.py",
+      "line": 17,
+      "message": "SQL injection: user input is interpolated directly into the query string. Use parameterized queries.",
+      "suggested_code": "query = \\"SELECT * FROM users WHERE id = %s\\""
+    },
+    {
+      "file_path": "src/app.py",
+      "line": 23,
+      "message": "SQL injection via string formatting AND plaintext password storage. Use parameterized queries and hash passwords with bcrypt.",
+      "suggested_code": null
+    }
+  ]
+}
+```
+"""
 
     def get_azure_langchain_model(self) -> Optional[AzureChatOpenAI]:
         """
@@ -725,6 +1054,110 @@ Provide actionable feedback structured according to the guidelines.
                 raise
 
         raise Exception("All LLM providers failed")
+
+    def review_code_structured(
+        self,
+        diff: str,
+        sonar_context: str,
+        pr_info: dict,
+        file_context: str = "",
+    ) -> ReviewWithSuggestions:
+        """Review code and return structured output with inline suggestions.
+
+        This annotates the diff with line numbers, then calls the structured
+        LangChain chain to get a ``ReviewWithSuggestions`` object containing
+        both the review summary and a list of inline suggestions.
+
+        For large diffs the method falls back to the plain-text review
+        (``review_code``) wrapped in a ``ReviewWithSuggestions`` with an
+        empty ``inline_suggestions`` list.
+
+        Args:
+            diff: Git diff of changes
+            sonar_context: SonarQube analysis results
+            pr_info: PR metadata
+            file_context: Additional file context if needed
+
+        Returns:
+            ReviewWithSuggestions with summary and inline_suggestions
+        """
+        approx_tokens = self._estimate_token_count(diff)
+        is_large_diff = approx_tokens > self.max_tokens_per_diff
+
+        # For large diffs, fall back to plain summary only (no inline suggestions)
+        if is_large_diff:
+            print("ℹ️  Large diff detected; using plain review (no inline suggestions).")
+            plain_review = self.review_code(
+                diff=diff,
+                sonar_context=sonar_context,
+                pr_info=pr_info,
+                file_context=file_context,
+            )
+            return ReviewWithSuggestions(
+                summary=plain_review,
+                inline_suggestions=[],
+            )
+
+        # Annotate diff with line numbers for the LLM
+        annotated_diff = annotate_diff_with_line_numbers(diff)
+
+        # Try structured chain (Azure LangChain – dedicated or shared model)
+        if (self.azure_langchain_structured or self.azure_langchain) and self.structured_review_chain is not None:
+            try:
+                return self._invoke_structured_review(
+                    annotated_diff, sonar_context, pr_info, file_context
+                )
+            except Exception as e:
+                print(f"⚠️  Structured review via LangChain failed: {e}")
+                print("⚠️  Falling back to plain review...")
+
+        # Fallback: plain review wrapped in ReviewWithSuggestions
+        plain_review = self.review_code(
+            diff=diff,
+            sonar_context=sonar_context,
+            pr_info=pr_info,
+            file_context=file_context,
+        )
+        return ReviewWithSuggestions(
+            summary=plain_review,
+            inline_suggestions=[],
+        )
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def _invoke_structured_review(
+        self,
+        annotated_diff: str,
+        sonar_context: str,
+        pr_info: dict,
+        file_context: str = "",
+    ) -> ReviewWithSuggestions:
+        """Invoke the structured review chain and return parsed output."""
+        if not self.structured_review_chain:
+            raise ValueError("Structured review chain not initialized")
+
+        print(f"🤖 Calling Azure OpenAI via LangChain for structured review "
+              f"({self.azure_deployment})...")
+
+        additions = pr_info.get("additions", 0)
+        deletions = pr_info.get("deletions", 0)
+        lines_changed = additions + deletions
+
+        variables = {
+            "title": pr_info.get("title", "N/A"),
+            "author": pr_info.get("author", "Unknown"),
+            "base_branch": pr_info.get("base_branch", "unknown"),
+            "changed_files": pr_info.get("changed_files", 0),
+            "lines_changed": lines_changed,
+            "additions": additions,
+            "deletions": deletions,
+            "description": pr_info.get("description", "No description provided"),
+            "diff": annotated_diff,
+            "sonar_context": sonar_context,
+            "file_context": file_context or "",
+            "format_instructions": self.structured_parser.get_format_instructions(),
+        }
+
+        return self.structured_review_chain.invoke(variables)
 
     def _build_system_prompt(self) -> str:
         """Build system prompt for code review"""

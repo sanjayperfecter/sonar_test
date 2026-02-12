@@ -147,6 +147,43 @@ class GitHubClient:
         except Exception as e:
             return f"Error: {str(e)}"
 
+    def get_changed_files_content(self) -> str:
+        """Fetch the full content of each changed file in the PR.
+
+        Returns a formatted string with each file's complete source code,
+        annotated with line numbers so the LLM can reference any line in
+        the file (not just changed lines).
+
+        Deleted files and files matching skip rules are excluded.
+        """
+        files = self.pr.get_files()
+        content_text = ""
+        file_count = 0
+
+        for file in files:
+            if self.should_skip_file(file.filename):
+                continue
+            # Skip deleted files – they no longer exist in the head branch
+            if file.status == "removed":
+                continue
+
+            full_content = self.get_file_content(file.filename)
+            # Skip files that failed to fetch
+            if full_content.startswith("Error"):
+                print(f"⚠️  Skipping {file.filename}: {full_content}")
+                continue
+
+            file_count += 1
+            content_text += f"\n### File: {file.filename}\n"
+            numbered_lines = "\n".join(
+                f"{i + 1}| {line}"
+                for i, line in enumerate(full_content.splitlines())
+            )
+            content_text += f"```\n{numbered_lines}\n```\n"
+
+        print(f"  Fetched full content for {file_count} file(s)")
+        return content_text
+
     def post_review_comment(self, body: str, path: str, line: int):
         """Post inline review comment on specific line"""
         try:
@@ -186,6 +223,125 @@ class GitHubClient:
                 print("✅ Posted as regular comment instead")
             except:
                 pass
+
+    def post_review_with_comments(self, body: str, event: str = "COMMENT",
+                                  comments: Optional[List[Dict]] = None):
+        """Post PR review with summary body AND inline comments on specific lines.
+
+        This submits a single review that includes the summary as the review
+        body (same as post_review_summary) plus inline comments attached to
+        specific lines in the diff.
+
+        Args:
+            body: Review comment body (the summary)
+            event: One of APPROVE, REQUEST_CHANGES, COMMENT
+            comments: List of inline comment dicts, each with:
+                - path (str): relative file path
+                - line (int): line number in the new file
+                - side (str): "RIGHT" for additions/context, "LEFT" for deletions
+                - body (str): comment text (may include ```suggestion``` blocks)
+        """
+        # Validate event type
+        valid_events = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
+        if event not in valid_events:
+            event = "COMMENT"
+
+        # If no inline comments, fall back to summary-only review
+        if not comments:
+            self.post_review_summary(body, event)
+            return
+
+        try:
+            # PyGithub's create_review accepts comments as a list of
+            # ReviewComment-like dicts with path, body, line, side etc.
+            review_comments = []
+            for c in comments:
+                comment_dict = {
+                    "path": c["path"],
+                    "body": c["body"],
+                    "line": c["line"],
+                    "side": c.get("side", "RIGHT"),
+                }
+                # Include start_line for multi-line comments if provided
+                if "start_line" in c:
+                    comment_dict["start_line"] = c["start_line"]
+                    comment_dict["start_side"] = c.get("start_side", "RIGHT")
+                review_comments.append(comment_dict)
+
+            self.pr.create_review(
+                body=body,
+                event=event,
+                comments=review_comments,
+            )
+            print(f"✅ Posted review with {len(review_comments)} inline "
+                  f"comment(s) and event: {event}")
+        except GithubException as e:
+            print(f"❌ Error posting review with inline comments: {e}")
+            # Fallback: post summary only, then try individual comments
+            print("⚠️  Falling back to summary-only review + individual comments...")
+            self.post_review_summary(body, event)
+            for c in (comments or []):
+                try:
+                    self.post_review_comment(
+                        body=c["body"],
+                        path=c["path"],
+                        line=c["line"],
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"❌ Unexpected error posting review with comments: {e}")
+            self.post_review_summary(body, event)
+
+    def request_reviewers(
+        self,
+        users: Optional[List[str]] = None,
+        teams: Optional[List[str]] = None,
+    ) -> None:
+        """Request review from specific users and/or teams.
+
+        Notes:
+        - This adds entries under GitHub's "Requested reviewers".
+        - It does not force/auto-approve; humans still must approve.
+        - Team review requests only work for org repos with appropriate permissions.
+        """
+        users = [u for u in (users or []) if u]
+        teams = [t for t in (teams or []) if t]
+
+        if not users and not teams:
+            return
+
+        try:
+            self.pr.create_review_request(reviewers=users, team_reviewers=teams)
+            who = []
+            if users:
+                who.append(f"users={users}")
+            if teams:
+                who.append(f"teams={teams}")
+            print(f"✅ Requested review ({', '.join(who)})")
+        except GithubException as e:
+            # Common case: already requested / invalid reviewer / insufficient perms
+            print(f"⚠️  Could not request reviewers: {e}")
+        except Exception as e:
+            print(f"⚠️  Unexpected error requesting reviewers: {e}")
+
+    def maybe_request_reviewers(self, event_type: str) -> None:
+        """Request human reviewers based on .github/ai-review-config.yaml settings."""
+        cfg = (self.config or {}).get("github", {}).get("request_reviewers", {}) or {}
+        if not cfg.get("enabled", False):
+            return
+
+        when = str(cfg.get("when", "always")).upper()
+        if when not in {"ALWAYS", "REQUEST_CHANGES", "APPROVE"}:
+            when = "ALWAYS"
+
+        event_type_norm = str(event_type or "").upper()
+        if when != "ALWAYS" and event_type_norm != when:
+            return
+
+        users = cfg.get("users", []) or []
+        teams = cfg.get("teams", []) or []
+        self.request_reviewers(users=users, teams=teams)
 
     def create_suggested_change(self, path: str, line: int, 
                                 old_code: str, new_code: str, 
