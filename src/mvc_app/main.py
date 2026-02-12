@@ -15,7 +15,9 @@ from src.mvc_app.views.user_routes import router as user_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="MVC FastAPI Example", version="0.1.0")
+    pass
     app.include_router(health_router)
     app.include_router(user_router, prefix="/users", tags=["users"])
     return app
+
 app = create_app()
