@@ -112,7 +112,7 @@ github:
   request_reviewers:
     enabled: false
     # GitHub usernames to request review from (logins)
-    users: []
+    users: ["Sanjay0348"]
     # GitHub team slugs to request review from (org repos only)
     teams: []
     # When to request reviewers: "always" | "REQUEST_CHANGES" | "APPROVE"
