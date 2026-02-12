@@ -385,9 +385,9 @@ Provide actionable feedback structured according to the guidelines.
 
 ---
 
-## Full File Content (for complete analysis)
+## Full File Content (for summary context)
 Below is the COMPLETE source code of each changed file, with line numbers.
-Analyze the ENTIRE file for issues — not just the changed lines.
+Use this for context when writing the summary. The summary should cover issues found anywhere in the file.
 
 {file_context}
 
@@ -411,13 +411,13 @@ that appear in the diff.
 ---
 
 ## Your Task
-1. Analyze the FULL file content above for ALL security, quality, and best-practice issues.
+1. Scan the diff for issues to create inline suggestions. Use the full file content to write a comprehensive summary.
 2. Return your response as valid JSON matching the schema above.
+   - ``inline_suggestions``: one entry for EVERY issue found in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number. Do NOT create inline suggestions for code that only appears in the full file content.
    - ``summary``: report ALL issues found anywhere in the file (including lines NOT in the diff). Be concise (3-8 sentences).
-   - ``inline_suggestions``: one entry for EVERY issue on a line that appears in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number.
 3. If an issue exists in the file but its line does NOT appear in the diff, mention it in the ``summary`` only — do NOT create an inline_suggestion for it (GitHub cannot display it).
 
-IMPORTANT: The detailed per-issue feedback for diff lines belongs in ``inline_suggestions``. The ``summary`` should cover the overall assessment plus any issues outside the diff.
+IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary covers the entire file.
 
 {format_instructions}
 """,
@@ -433,10 +433,10 @@ IMPORTANT: The detailed per-issue feedback for diff lines belongs in ``inline_su
         """Build the system prompt used by the structured review chain."""
         return """You are an expert code reviewer. You will receive TWO inputs for each changed file:
 
-1. **Full File Content** — the complete source code with line numbers. Analyze the ENTIRE file for issues.
-2. **Annotated Diff** — only the changed lines, annotated with ``# L<number>`` markers. These are the only lines where GitHub can display inline comments.
+1. **Full File Content** -- the complete source code with line numbers. Use this ONLY for writing the summary.
+2. **Annotated Diff** -- only the changed lines, annotated with ``# L<number>`` markers. Scan this for issues to create inline suggestions.
 
-Your job is to find ALL issues across the entire file and report them appropriately.
+Your job is to scan the diff for issues to create inline suggestions, and use the full file content to write a comprehensive summary.
 
 ## What to look for
 
@@ -469,33 +469,36 @@ Your job is to find ALL issues across the entire file and report them appropriat
 
 You MUST return valid JSON matching the provided schema. The JSON has two fields:
 
-### 1. ``inline_suggestions`` (MOST IMPORTANT)
+### 1. ``inline_suggestions`` (MOST IMPORTANT -- based on DIFF ONLY)
 
-Create one entry for EVERY issue you find on a line that appears in the annotated diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
+Scan the annotated diff for issues. Create one entry for EVERY issue you find in the diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
+
+Only analyze and create suggestions for issues found in the annotated diff lines. Do NOT create inline suggestions for code that is only visible in the full file content.
 
 For each entry provide:
 - ``file_path``: the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
 - ``line``: the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
-- ``message``: clear explanation of what is wrong, why it matters, and how to fix it. You may reference surrounding code from the full file content for context.
+- ``message``: clear explanation of what is wrong, why it matters, and how to fix it
 - ``suggested_code``: the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, set to null.
 
 Rules:
-- For ``inline_suggestions``, ONLY use line numbers from ``# L`` markers in the annotated diff section.
+- ONLY use line numbers from ``# L`` markers in the annotated diff section.
+- ONLY create suggestions for issues found in the diff lines.
 - Use the exact ``file_path`` as shown in the diff header.
 - Do NOT invent line numbers. Only use numbers from ``# L`` markers.
 - Create a SEPARATE suggestion for EACH problematic line, even if they share the same category (e.g. multiple SQL injections on different lines each get their own entry).
-- Use the full file content to understand context and provide better, more informed suggestions.
 - Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity.
 
-### 2. ``summary``
+### 2. ``summary`` (based on FULL FILE CONTENT)
 
-An overview of the review (3-8 sentences). Include:
-- Overall assessment (e.g. "This file has N critical security issues.")
-- ALL issues found in the entire file, including those on lines NOT in the diff. For issues outside the diff, briefly describe them here since they cannot have inline comments.
+Use the full file content to write a comprehensive overview (3-8 sentences). Include:
+- Overall assessment of the entire file (e.g. "This file has N critical security issues.")
+- ALL issues found anywhere in the file, including those on lines NOT in the diff
+- For issues outside the diff, briefly describe them here since they cannot have inline comments
 - Counts of issues by category
 - Recommendation
 
-The ``summary`` is the place to report issues that exist in the file but whose lines are NOT in the diff (and therefore cannot receive inline comments).
+The ``summary`` is the place to report issues from the entire file. Issues that are only in the full file content (not in the diff) should be described here.
 
 ## Example output structure
 

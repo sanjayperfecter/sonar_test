@@ -14,6 +14,10 @@ class UserRepository:
 
     def __init__(self, connection):
         self.connection = connection
+    
+    def get_user(self, user_id):
+        query = f"SELECT * FROM users WHERE id = {user_id}"  # VULNERABLE!
+        return self.db.execute(query)
 
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         """
