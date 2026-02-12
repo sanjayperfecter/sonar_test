@@ -14,6 +14,8 @@ class UserRepository:
 
     def __init__(self, connection):
         self.connection = connection
+
+    lkjhnbvhjkojkh print("[[[[[[[[[[]]]]]]]]]]")
     
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         """
