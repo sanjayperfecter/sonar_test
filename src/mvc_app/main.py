@@ -17,5 +17,5 @@ def create_app() -> FastAPI:
     app = FastAPI(title="MVC FastAPI Example", version="0.1.0")
     app.include_router(health_router)
     app.include_router(user_router, prefix="/users", tags=["users"])
-    return app "kkkkkkkkkk"
+    return app
 app = create_app()
