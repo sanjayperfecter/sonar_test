@@ -187,6 +187,75 @@ class GitHubClient:
             except:
                 pass
 
+    def post_review_with_comments(self, body: str, event: str = "COMMENT",
+                                  comments: Optional[List[Dict]] = None):
+        """Post PR review with summary body AND inline comments on specific lines.
+
+        This submits a single review that includes the summary as the review
+        body (same as post_review_summary) plus inline comments attached to
+        specific lines in the diff.
+
+        Args:
+            body: Review comment body (the summary)
+            event: One of APPROVE, REQUEST_CHANGES, COMMENT
+            comments: List of inline comment dicts, each with:
+                - path (str): relative file path
+                - line (int): line number in the new file
+                - side (str): "RIGHT" for additions/context, "LEFT" for deletions
+                - body (str): comment text (may include ```suggestion``` blocks)
+        """
+        # Validate event type
+        valid_events = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
+        if event not in valid_events:
+            event = "COMMENT"
+
+        # If no inline comments, fall back to summary-only review
+        if not comments:
+            self.post_review_summary(body, event)
+            return
+
+        try:
+            # PyGithub's create_review accepts comments as a list of
+            # ReviewComment-like dicts with path, body, line, side etc.
+            review_comments = []
+            for c in comments:
+                comment_dict = {
+                    "path": c["path"],
+                    "body": c["body"],
+                    "line": c["line"],
+                    "side": c.get("side", "RIGHT"),
+                }
+                # Include start_line for multi-line comments if provided
+                if "start_line" in c:
+                    comment_dict["start_line"] = c["start_line"]
+                    comment_dict["start_side"] = c.get("start_side", "RIGHT")
+                review_comments.append(comment_dict)
+
+            self.pr.create_review(
+                body=body,
+                event=event,
+                comments=review_comments,
+            )
+            print(f"✅ Posted review with {len(review_comments)} inline "
+                  f"comment(s) and event: {event}")
+        except GithubException as e:
+            print(f"❌ Error posting review with inline comments: {e}")
+            # Fallback: post summary only, then try individual comments
+            print("⚠️  Falling back to summary-only review + individual comments...")
+            self.post_review_summary(body, event)
+            for c in (comments or []):
+                try:
+                    self.post_review_comment(
+                        body=c["body"],
+                        path=c["path"],
+                        line=c["line"],
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"❌ Unexpected error posting review with comments: {e}")
+            self.post_review_summary(body, event)
+
     def create_suggested_change(self, path: str, line: int, 
                                 old_code: str, new_code: str, 
                                 explanation: str):

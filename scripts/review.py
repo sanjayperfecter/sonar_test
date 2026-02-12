@@ -320,18 +320,21 @@ def main():
         print(f"  {quality_gate_text}")
         print(f"  Found {len(sonar_issues)} issues")
 
-        # Perform AI review
+        # Perform AI review (structured: summary + inline suggestions)
         print("\n🤖 Running AI code review...")
         github.set_status("pending", "AI review in progress...", "ai-code-review")
 
         try:
-            review_result = llm.review_code(
+            structured_review = llm.review_code_structured(
                 diff=diff,
                 sonar_context=sonar_context,
                 pr_info=pr_info,
                 file_context=""
             )
-            print("  ✅ AI review completed")
+            review_result = structured_review.summary
+            inline_suggestions = structured_review.inline_suggestions
+            print(f"  ✅ AI review completed "
+                  f"({len(inline_suggestions)} inline suggestion(s))")
 
         except Exception as e:
             print(f"\n❌ AI review failed: {e}")
@@ -352,7 +355,10 @@ def main():
         print(f"  Critical Issues: {decision.critical_issues_found}")
         print(f"  Reasoning: {decision.reasoning}")
 
-        # Post review summary
+        # Build inline comments for GitHub from LLM suggestions
+        inline_comments = _build_inline_comments(inline_suggestions, pr_info)
+
+        # Post review summary + inline comments
         print("\n📝 Posting review...")
         summary = format_review_summary(
             review_result, 
@@ -362,7 +368,13 @@ def main():
             decision
         )
 
-        github.post_review_summary(summary, decision.event_type)
+        if inline_comments:
+            print(f"  📌 Including {len(inline_comments)} inline comment(s)")
+            github.post_review_with_comments(
+                summary, decision.event_type, inline_comments
+            )
+        else:
+            github.post_review_summary(summary, decision.event_type)
 
         # Set final status
         if decision.event_type == "APPROVE":
@@ -388,6 +400,54 @@ def main():
             pass
 
         return 1
+
+
+MAX_INLINE_COMMENTS = 25  # Cap to avoid spamming the PR
+
+
+def _build_inline_comments(
+    inline_suggestions: list,
+    pr_info: dict,
+) -> list:
+    """Convert LLM inline suggestions into GitHub review comment dicts.
+
+    Each returned dict has the keys expected by
+    ``GitHubClient.post_review_with_comments``: ``path``, ``line``,
+    ``side``, and ``body``.
+
+    Suggestions without a valid ``line`` or ``file_path`` are silently
+    skipped. The list is capped at ``MAX_INLINE_COMMENTS``.
+    """
+    comments = []
+
+    for suggestion in inline_suggestions:
+        file_path = getattr(suggestion, "file_path", None) or ""
+        line = getattr(suggestion, "line", None)
+        message = getattr(suggestion, "message", None) or ""
+        suggested_code = getattr(suggestion, "suggested_code", None)
+
+        # Skip invalid entries
+        if not file_path or not line or line < 1:
+            continue
+
+        # Build the comment body
+        if suggested_code:
+            # Use GitHub's suggestion block for one-click apply
+            body = f"{message}\n\n```suggestion\n{suggested_code}\n```"
+        else:
+            body = message
+
+        comments.append({
+            "path": file_path,
+            "line": int(line),
+            "side": "RIGHT",
+            "body": body,
+        })
+
+        if len(comments) >= MAX_INLINE_COMMENTS:
+            break
+
+    return comments
 
 
 def format_review_summary(review_text: str, quality_gate_text: str,
