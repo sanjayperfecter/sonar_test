@@ -147,6 +147,43 @@ class GitHubClient:
         except Exception as e:
             return f"Error: {str(e)}"
 
+    def get_changed_files_content(self) -> str:
+        """Fetch the full content of each changed file in the PR.
+
+        Returns a formatted string with each file's complete source code,
+        annotated with line numbers so the LLM can reference any line in
+        the file (not just changed lines).
+
+        Deleted files and files matching skip rules are excluded.
+        """
+        files = self.pr.get_files()
+        content_text = ""
+        file_count = 0
+
+        for file in files:
+            if self.should_skip_file(file.filename):
+                continue
+            # Skip deleted files – they no longer exist in the head branch
+            if file.status == "removed":
+                continue
+
+            full_content = self.get_file_content(file.filename)
+            # Skip files that failed to fetch
+            if full_content.startswith("Error"):
+                print(f"⚠️  Skipping {file.filename}: {full_content}")
+                continue
+
+            file_count += 1
+            content_text += f"\n### File: {file.filename}\n"
+            numbered_lines = "\n".join(
+                f"{i + 1}| {line}"
+                for i, line in enumerate(full_content.splitlines())
+            )
+            content_text += f"```\n{numbered_lines}\n```\n"
+
+        print(f"  Fetched full content for {file_count} file(s)")
+        return content_text
+
     def post_review_comment(self, body: str, path: str, line: int):
         """Post inline review comment on specific line"""
         try:

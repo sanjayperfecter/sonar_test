@@ -385,10 +385,19 @@ Provide actionable feedback structured according to the guidelines.
 
 ---
 
+## Full File Content (for complete analysis)
+Below is the COMPLETE source code of each changed file, with line numbers.
+Analyze the ENTIRE file for issues — not just the changed lines.
+
+{file_context}
+
+---
+
 ## Code Changes (Annotated Diff with Line Numbers)
-Each added or context line is annotated with ``# L<number>`` showing its line
-number in the new version of the file. Use these exact numbers in your
-``inline_suggestions``.
+This shows ONLY the lines that were changed in this PR. Each added or context
+line is annotated with ``# L<number>``. Inline suggestions MUST use these
+exact ``# L`` line numbers, because GitHub can only display comments on lines
+that appear in the diff.
 
 ```diff
 {diff}
@@ -401,15 +410,14 @@ number in the new version of the file. Use these exact numbers in your
 
 ---
 
-{file_context}
-
 ## Your Task
-1. Analyze the code changes for ALL security, quality, and best-practice issues.
+1. Analyze the FULL file content above for ALL security, quality, and best-practice issues.
 2. Return your response as valid JSON matching the schema above.
-   - ``summary``: concise overview of the review (3-5 sentences).
-   - ``inline_suggestions``: one entry for EVERY issue found, with file_path, line, message, and optionally suggested_code.
+   - ``summary``: report ALL issues found anywhere in the file (including lines NOT in the diff). Be concise (3-8 sentences).
+   - ``inline_suggestions``: one entry for EVERY issue on a line that appears in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number.
+3. If an issue exists in the file but its line does NOT appear in the diff, mention it in the ``summary`` only — do NOT create an inline_suggestion for it (GitHub cannot display it).
 
-IMPORTANT: The detailed per-issue feedback belongs in ``inline_suggestions``, NOT in the summary. Keep the summary short.
+IMPORTANT: The detailed per-issue feedback for diff lines belongs in ``inline_suggestions``. The ``summary`` should cover the overall assessment plus any issues outside the diff.
 
 {format_instructions}
 """,
@@ -423,7 +431,12 @@ IMPORTANT: The detailed per-issue feedback belongs in ``inline_suggestions``, NO
 
     def _build_structured_system_prompt(self) -> str:
         """Build the system prompt used by the structured review chain."""
-        return """You are an expert code reviewer. Your job is to find ALL issues in the code changes and report each one as an inline suggestion.
+        return """You are an expert code reviewer. You will receive TWO inputs for each changed file:
+
+1. **Full File Content** — the complete source code with line numbers. Analyze the ENTIRE file for issues.
+2. **Annotated Diff** — only the changed lines, annotated with ``# L<number>`` markers. These are the only lines where GitHub can display inline comments.
+
+Your job is to find ALL issues across the entire file and report them appropriately.
 
 ## What to look for
 
@@ -458,46 +471,48 @@ You MUST return valid JSON matching the provided schema. The JSON has two fields
 
 ### 1. ``inline_suggestions`` (MOST IMPORTANT)
 
-This is the primary output. Create one entry for EVERY issue you find in the diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
+Create one entry for EVERY issue you find on a line that appears in the annotated diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
 
 For each entry provide:
 - ``file_path``: the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
-- ``line``: the line number from the ``# L<number>`` annotation in the diff. Use the EXACT number shown after ``# L``.
-- ``message``: clear explanation of what is wrong, why it matters, and how to fix it
+- ``line``: the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
+- ``message``: clear explanation of what is wrong, why it matters, and how to fix it. You may reference surrounding code from the full file content for context.
 - ``suggested_code``: the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, set to null.
 
 Rules:
-- Only reference lines that have ``# L`` markers in the annotated diff.
+- For ``inline_suggestions``, ONLY use line numbers from ``# L`` markers in the annotated diff section.
 - Use the exact ``file_path`` as shown in the diff header.
 - Do NOT invent line numbers. Only use numbers from ``# L`` markers.
 - Create a SEPARATE suggestion for EACH problematic line, even if they share the same category (e.g. multiple SQL injections on different lines each get their own entry).
+- Use the full file content to understand context and provide better, more informed suggestions.
 - Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity.
 
 ### 2. ``summary``
 
-A SHORT overview of the review (3-5 sentences max). Include:
-- Overall assessment (e.g. "This PR has N critical security issues that must be fixed.")
+An overview of the review (3-8 sentences). Include:
+- Overall assessment (e.g. "This file has N critical security issues.")
+- ALL issues found in the entire file, including those on lines NOT in the diff. For issues outside the diff, briefly describe them here since they cannot have inline comments.
 - Counts of issues by category
-- One-line recommendation
+- Recommendation
 
-Do NOT repeat the detailed per-issue explanations here. The details belong in ``inline_suggestions``. Keep the summary concise to save tokens for the inline suggestions.
+The ``summary`` is the place to report issues that exist in the file but whose lines are NOT in the diff (and therefore cannot receive inline comments).
 
 ## Example output structure
 
 ```json
 {
-  "summary": "This PR introduces 5 critical security vulnerabilities...",
+  "summary": "This file contains 6 critical issues: 3 SQL injections (lines 17, 23, 36-38), XSS vulnerability (line 46), hardcoded credentials (lines 51-53), and missing error handling throughout. Lines 36-38 and 51-53 are not in the current diff but contain serious vulnerabilities that should be addressed.",
   "inline_suggestions": [
     {
       "file_path": "src/app.py",
       "line": 17,
-      "message": "SQL injection: user input is interpolated directly into the query string...",
+      "message": "SQL injection: user input is interpolated directly into the query string. Use parameterized queries.",
       "suggested_code": "query = \\"SELECT * FROM users WHERE id = %s\\""
     },
     {
       "file_path": "src/app.py",
       "line": 23,
-      "message": "Another SQL injection plus plaintext password storage...",
+      "message": "SQL injection via string formatting AND plaintext password storage. Use parameterized queries and hash passwords with bcrypt.",
       "suggested_code": null
     }
   ]

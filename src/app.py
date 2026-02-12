@@ -10,7 +10,7 @@ This file contains intentional security and quality issues
 class UserManager:
     def __init__(self, db):
         self.db = db
-
+             
     # SQL Injection vulnerability
     def get_user(self, user_id):
         query = f"SELECT *  FROM users WHERE id = {user_id}"  # VULNERABLE!

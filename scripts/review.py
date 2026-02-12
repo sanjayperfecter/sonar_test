@@ -5,6 +5,7 @@ Orchestrates the complete review workflow with LangChain integration
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Literal
@@ -248,6 +249,37 @@ def _filter_diff_excluded_paths(diff: str) -> str:
     return "".join(kept_blocks)
 
 
+def _filter_file_content_excluded_paths(content: str) -> str:
+    """Remove full-file-content sections for files we don't want to review.
+
+    Mirrors the same exclusion rules as ``_filter_diff_excluded_paths``
+    (scripts/ folders, filenames containing 'script').
+
+    The content format uses ``### File: path/to/file.py`` as section headers.
+    """
+    if not content:
+        return content
+
+    # Split on "### File:" headers, keeping the headers
+    sections = re.split(r"(?=\n### File: )", content)
+
+    def is_excluded(section: str) -> bool:
+        # Extract path from "### File: path/to/file.py"
+        match = re.match(r"\n?### File:\s*(.+)", section)
+        if not match:
+            return False
+        path = match.group(1).strip().lower()
+        if path.startswith("scripts/") or "/scripts/" in path:
+            return True
+        filename = os.path.basename(path)
+        if "script" in filename:
+            return True
+        return False
+
+    kept = [s for s in sections if not is_excluded(s)]
+    return "".join(kept)
+
+
 def print_banner():
     """Print startup banner"""
     print("=" * 80)
@@ -307,6 +339,12 @@ def main():
 
         print(f"  ✅ Found code changes to review")
 
+        # Fetch full file content for deeper analysis
+        print("\n📄 Fetching full file content for analysis...")
+        file_content = github.get_changed_files_content()
+        # Apply the same script-exclusion filter to full file content
+        file_content = _filter_file_content_excluded_paths(file_content)
+
         # Get SonarQube analysis
         print("\n🔍 Fetching SonarQube analysis...")
         pr_number = pr_info['number']
@@ -329,7 +367,7 @@ def main():
                 diff=diff,
                 sonar_context=sonar_context,
                 pr_info=pr_info,
-                file_context=""
+                file_context=file_content
             )
             review_result = structured_review.summary
             inline_suggestions = structured_review.inline_suggestions
