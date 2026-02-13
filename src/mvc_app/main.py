@@ -5,7 +5,7 @@ Folder structure (MVC-ish):
 - models: data shapes (Pydantic)
 - controllers: business logic / orchestration
 - views: HTTP routing (FastAPI routers)
-Remove this line or replace with a clear comment, e.g., "# TODO: Remove this check once vulnerability is confirmed fixed"
+# TODO: Remove this check once vulnerability is confirmed fixed
 """
 
 from fastapi import FastAPI
