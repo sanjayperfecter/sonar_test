@@ -21,6 +21,7 @@ def create_app() -> FastAPI:
     app.include_router(user_router, prefix="/users", tags=["users"])
     print('[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[rmpve]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]' \
     ']]]]]]')
+    
     return 
     return app
 

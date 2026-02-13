@@ -31,7 +31,17 @@ class InlineSuggestion(BaseModel):
         description="Relative file path exactly as shown in the diff header (e.g. 'src/app/main.py')"
     )
     line: int = Field(
-        description="Line number in the NEW version of the file (from the #L marker in the annotated diff)"
+        description=(
+            "Line number in the NEW version of the file (from the #L marker in the annotated diff). "
+            "For multi-line suggestions this is the END line of the range."
+        )
+    )
+    end_line: Optional[int] = Field(
+        default=None,
+        description=(
+            "Start line for multi-line suggestions. If the issue spans lines 22-24, "
+            "set end_line=22 and line=24. Leave null for single-line suggestions."
+        ),
     )
     message: str = Field(
         description="Clear explanation of what is wrong and why it should be changed"
@@ -39,9 +49,11 @@ class InlineSuggestion(BaseModel):
     suggested_code: Optional[str] = Field(
         default=None,
         description=(
-            "The corrected replacement code for that single line (or small block). "
-            "If you can provide a concrete fix, include it here. "
-            "If no concrete fix is possible, leave as null."
+            "The replacement code for the target line(s). MUST contain ONLY valid "
+            "source code — never explanatory text or natural language. When applied, "
+            "this value directly replaces the line(s) in the source file. "
+            "Use empty string '' to delete the line(s). "
+            "Use null ONLY when no concrete fix is possible (informational comment only)."
         ),
     )
 
@@ -417,8 +429,10 @@ that appear in the diff.
    - ``inline_suggestions``: one entry for EVERY issue found in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number. Do NOT create inline suggestions for code that only appears in the full file content.
    - ``summary``: report ALL issues found anywhere in the file (including lines NOT in the diff). Be concise (3-8 sentences).
 3. If an issue exists in the file but its line does NOT appear in the diff, mention it in the ``summary`` only — do NOT create an inline_suggestion for it (GitHub cannot display it).
+4. ALWAYS provide ``suggested_code`` with valid source code (not natural language). Use ``""`` to delete lines. Use multi-line via ``end_line`` for consecutive problematic lines.
 
 IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary covers the entire file.
+IMPORTANT: ``suggested_code`` is applied DIRECTLY to the source file. It must be valid code, never explanatory text.
 
 {format_instructions}
 """,
@@ -436,6 +450,38 @@ IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary cover
             | self._extract_and_parse_json
         )
 
+    @staticmethod
+    def _looks_like_natural_language(text: str) -> bool:
+        """Return True if *text* appears to be natural language rather than code.
+
+        Uses simple heuristics:
+        - Starts with a common English verb/phrase (case-insensitive)
+        - Contains no typical code characters (=, (, ), {, }, ;, :, [, ])
+        """
+        if not text or not text.strip():
+            return False
+
+        stripped = text.strip()
+
+        # Common natural-language openers that are NOT valid code
+        nl_prefixes = (
+            "remove ", "delete ", "this ", "should ", "replace ",
+            "consider ", "avoid ", "do not ", "don't ", "please ",
+            "you should ", "it is ", "the ", "make sure ",
+        )
+        lower = stripped.lower()
+        if any(lower.startswith(p) for p in nl_prefixes):
+            return True
+
+        # If the string has no typical code characters at all, it is likely prose
+        code_chars = set("=(){}[];:+-*/<>@#!&|%^~\\")
+        if not any(ch in code_chars for ch in stripped):
+            # Pure alphabetic / space text is almost certainly natural language
+            if all(ch.isalpha() or ch.isspace() or ch == ',' or ch == '.' for ch in stripped):
+                return True
+
+        return False
+
     def _extract_and_parse_json(self, text: str) -> ReviewWithSuggestions:
         """Extract JSON from LLM response and parse it into ReviewWithSuggestions.
         
@@ -443,6 +489,7 @@ IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary cover
         - JSON is wrapped in markdown code blocks (```json ... ```)
         - Extra text appears before or after the JSON
         - Response contains explanations alongside JSON
+        - ``suggested_code`` accidentally contains natural language (sanitized)
         """
         import json
         import re
@@ -472,12 +519,24 @@ IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary cover
             inline_suggestions = []
             for suggestion_data in inline_suggestions_data:
                 try:
+                    raw_end_line = suggestion_data.get("end_line")
                     suggestion = InlineSuggestion(
                         file_path=suggestion_data.get("file_path", ""),
                         line=int(suggestion_data.get("line", 0)),
+                        end_line=int(raw_end_line) if raw_end_line is not None else None,
                         message=suggestion_data.get("message", ""),
-                        suggested_code=suggestion_data.get("suggested_code")
+                        suggested_code=suggestion_data.get("suggested_code"),
                     )
+
+                    # Sanitize: if suggested_code looks like natural language
+                    # rather than source code, discard it to avoid corrupting
+                    # the file when a user clicks "Apply suggestion".
+                    if (suggestion.suggested_code is not None
+                            and self._looks_like_natural_language(suggestion.suggested_code)):
+                        print(f"⚠️  suggested_code looks like natural language, "
+                              f"resetting to None: {suggestion.suggested_code!r}")
+                        suggestion.suggested_code = None
+
                     inline_suggestions.append(suggestion)
                 except Exception as e:
                     print(f"⚠️  Failed to parse inline suggestion: {e}")
@@ -548,16 +607,40 @@ Only analyze and create suggestions for issues found in the annotated diff lines
 
 For each entry in the array, provide:
 - ``file_path`` (string): the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
-- ``line`` (number): the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
+- ``line`` (number): for single-line suggestions, the line number from ``# L``. For multi-line suggestions, the LAST (end) line of the range.
+- ``end_line`` (number or null): for multi-line suggestions, the FIRST (start) line of the range. Must be less than ``line``. Use null for single-line suggestions.
 - ``message`` (string): clear explanation of what is wrong, why it matters, and how to fix it
-- ``suggested_code`` (string or null): the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, use null.
+- ``suggested_code`` (string or null): the replacement code that will DIRECTLY replace the target line(s) in the source file when applied.
 
-Rules for inline_suggestions:
+#### CRITICAL rules for ``suggested_code``
+
+``suggested_code`` is inserted directly into the source file, replacing the target line(s). It must follow these rules:
+
+1. **MUST be valid source code ONLY.** Never put natural language, explanations, or instructions in this field.
+   - BAD: ``"Remove this line or replace with a comment"`` (this is natural language, NOT code)
+   - BAD: ``"This should be deleted"`` (natural language)
+   - GOOD: ``""`` (empty string — deletes the line)
+   - GOOD: ``"    return app"`` (actual replacement code)
+   - GOOD: ``"# TODO: fix SQL injection here"`` (a code comment IS valid code)
+
+2. **To DELETE a line:** use an empty string ``""``. Do NOT use null for deletions.
+
+3. **Use null ONLY** when you genuinely cannot suggest any concrete fix (purely informational comment).
+
+4. **ALWAYS prefer providing a concrete fix** over null. Most issues have a fix — provide it.
+
+5. **No diff markers or line numbers.** Only the raw replacement source code, preserving correct indentation.
+
+6. **For multi-line suggestions:** ``suggested_code`` replaces ALL lines from ``end_line`` to ``line`` (inclusive). Include the full replacement for the entire range, with newlines between lines.
+
+#### Rules for ``line`` and ``end_line``
+
 - ONLY use line numbers from ``# L`` markers in the annotated diff section
 - ONLY create suggestions for issues found in the diff lines
 - Use the exact ``file_path`` as shown in the diff header
 - Do NOT invent line numbers. Only use numbers from ``# L`` markers
-- Create a SEPARATE suggestion for EACH problematic line
+- For a single problematic line: set ``line`` to the ``# L`` number, ``end_line`` to null
+- For consecutive problematic lines (e.g. a multi-line statement): set ``end_line`` to the first ``# L`` number and ``line`` to the last ``# L`` number
 - Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity
 - If NO issues are found in the diff, return an empty array: []
 
@@ -573,19 +656,28 @@ Use the full file content to write a comprehensive overview (3-8 sentences). Inc
 ## Example output structure
 
 {{
-  "summary": "This file contains 6 critical issues: 3 SQL injections (lines 17, 23, 36-38), XSS vulnerability (line 46), hardcoded credentials (lines 51-53), and missing error handling throughout. Lines 36-38 and 51-53 are not in the current diff but contain serious vulnerabilities that should be addressed.",
+  "summary": "This file has 3 issues in the diff: a debug print statement (lines 22-23), unreachable code due to bare return (line 24), and an existing SQL injection on line 45 outside the diff that should also be addressed.",
   "inline_suggestions": [
     {{
       "file_path": "src/app.py",
-      "line": 17,
-      "message": "SQL injection: user input is interpolated directly into the query string. Use parameterized queries.",
-      "suggested_code": "query = \\"SELECT * FROM users WHERE id = %s\\""
+      "line": 23,
+      "end_line": 22,
+      "message": "Debug print statement with excessive brackets and unclear content. Remove before production to avoid cluttering logs and leaking internal information.",
+      "suggested_code": ""
     }},
     {{
       "file_path": "src/app.py",
-      "line": 23,
-      "message": "SQL injection via string formatting AND plaintext password storage. Use parameterized queries and hash passwords with bcrypt.",
-      "suggested_code": null
+      "line": 24,
+      "end_line": null,
+      "message": "Bare `return` exits the function without returning the FastAPI app instance, causing `create_app()` to return None. This breaks application initialization.",
+      "suggested_code": "    return app"
+    }},
+    {{
+      "file_path": "src/app.py",
+      "line": 17,
+      "end_line": null,
+      "message": "SQL injection: user input is interpolated directly into the query string. Use parameterized queries.",
+      "suggested_code": "    query = \\"SELECT * FROM users WHERE id = %s\\""
     }}
   ]
 }}
