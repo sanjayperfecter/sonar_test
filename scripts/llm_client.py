@@ -845,22 +845,23 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
 
         print(f"🤖 Calling Azure OpenAI via LangChain ({self.azure_deployment})...")
 
-        additions = pr_info.get("additions", 0)
-        deletions = pr_info.get("deletions", 0)
+        # Safely extract PR info with defaults to avoid KeyError
+        additions = pr_info.get("additions", 0) if pr_info.get("additions") is not None else 0
+        deletions = pr_info.get("deletions", 0) if pr_info.get("deletions") is not None else 0
         lines_changed = additions + deletions
 
         variables = {
-            "title": pr_info.get("title", "N/A"),
-            "author": pr_info.get("author", "Unknown"),
-            "base_branch": pr_info.get("base_branch", "unknown"),
-            "changed_files": pr_info.get("changed_files", 0),
-            "lines_changed": lines_changed,
-            "additions": additions,
-            "deletions": deletions,
-            "description": pr_info.get("description", "No description provided"),
-            "diff": diff,
-            "sonar_context": sonar_context,
-            "file_context": file_context or "",
+            "title": str(pr_info.get("title") or "N/A"),
+            "author": str(pr_info.get("author") or "Unknown"),
+            "base_branch": str(pr_info.get("base_branch") or "unknown"),
+            "changed_files": int(pr_info.get("changed_files") or 0),
+            "lines_changed": int(lines_changed),
+            "additions": int(additions),
+            "deletions": int(deletions),
+            "description": str(pr_info.get("description") or "No description provided"),
+            "diff": str(diff),
+            "sonar_context": str(sonar_context or "No SonarQube analysis available"),
+            "file_context": str(file_context or ""),
         }
 
         return self.review_chain.invoke(variables)
@@ -887,8 +888,9 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
         chunk_reviews: List[str] = []
         truncated = False
 
-        additions = pr_info.get("additions", 0)
-        deletions = pr_info.get("deletions", 0)
+        # Safely extract PR info with defaults to avoid KeyError
+        additions = pr_info.get("additions", 0) if pr_info.get("additions") is not None else 0
+        deletions = pr_info.get("deletions", 0) if pr_info.get("deletions") is not None else 0
         lines_changed = additions + deletions
 
         for file_diff in file_diffs:
@@ -905,17 +907,17 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
                     break
 
                 variables = {
-                    "title": pr_info.get("title", "N/A"),
-                    "author": pr_info.get("author", "Unknown"),
-                    "base_branch": pr_info.get("base_branch", "unknown"),
-                    "changed_files": pr_info.get("changed_files", 0),
-                    "lines_changed": lines_changed,
-                    "additions": additions,
-                    "deletions": deletions,
-                    "description": pr_info.get("description", "No description provided"),
-                    "diff": snippet,
-                    "sonar_context": sonar_context,
-                    "file_context": file_context or "",
+                    "title": str(pr_info.get("title") or "N/A"),
+                    "author": str(pr_info.get("author") or "Unknown"),
+                    "base_branch": str(pr_info.get("base_branch") or "unknown"),
+                    "changed_files": int(pr_info.get("changed_files") or 0),
+                    "lines_changed": int(lines_changed),
+                    "additions": int(additions),
+                    "deletions": int(deletions),
+                    "description": str(pr_info.get("description") or "No description provided"),
+                    "diff": str(snippet),
+                    "sonar_context": str(sonar_context or "No SonarQube analysis available"),
+                    "file_context": str(file_context or ""),
                 }
 
                 review = self.review_chain.invoke(variables)
@@ -1107,8 +1109,14 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
                 return self._invoke_structured_review(
                     annotated_diff, sonar_context, pr_info, file_context
                 )
+            except KeyError as e:
+                print(f"⚠️  Structured review failed due to missing key: {e}")
+                print(f"    PR info keys: {list(pr_info.keys())}")
+                print("⚠️  Falling back to plain review...")
             except Exception as e:
                 print(f"⚠️  Structured review via LangChain failed: {e}")
+                import traceback
+                print(f"    Full traceback: {traceback.format_exc()}")
                 print("⚠️  Falling back to plain review...")
 
         # Fallback: plain review wrapped in ReviewWithSuggestions
@@ -1138,23 +1146,24 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
         print(f"🤖 Calling Azure OpenAI via LangChain for structured review "
               f"({self.azure_deployment})...")
 
-        additions = pr_info.get("additions", 0)
-        deletions = pr_info.get("deletions", 0)
+        # Safely extract PR info with defaults to avoid KeyError
+        additions = pr_info.get("additions", 0) if pr_info.get("additions") is not None else 0
+        deletions = pr_info.get("deletions", 0) if pr_info.get("deletions") is not None else 0
         lines_changed = additions + deletions
 
         variables = {
-            "title": pr_info.get("title", "N/A"),
-            "author": pr_info.get("author", "Unknown"),
-            "base_branch": pr_info.get("base_branch", "unknown"),
-            "changed_files": pr_info.get("changed_files", 0),
-            "lines_changed": lines_changed,
-            "additions": additions,
-            "deletions": deletions,
-            "description": pr_info.get("description", "No description provided"),
-            "diff": annotated_diff,
-            "sonar_context": sonar_context,
-            "file_context": file_context or "",
-            "format_instructions": self.structured_parser.get_format_instructions(),
+            "title": str(pr_info.get("title") or "N/A"),
+            "author": str(pr_info.get("author") or "Unknown"),
+            "base_branch": str(pr_info.get("base_branch") or "unknown"),
+            "changed_files": int(pr_info.get("changed_files") or 0),
+            "lines_changed": int(lines_changed),
+            "additions": int(additions),
+            "deletions": int(deletions),
+            "description": str(pr_info.get("description") or "No description provided"),
+            "diff": str(annotated_diff),
+            "sonar_context": str(sonar_context or "No SonarQube analysis available"),
+            "file_context": str(file_context or ""),
+            "format_instructions": str(self.structured_parser.get_format_instructions()),
         }
 
         return self.structured_review_chain.invoke(variables)
