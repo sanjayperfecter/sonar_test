@@ -7,9 +7,8 @@ Orchestrates the complete review workflow with LangChain integration
 import os
 import re
 import sys
-from collections import Counter
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -405,7 +404,6 @@ def main():
             len(sonar_issues),
             pr_info,
             decision,
-            inline_suggestions=inline_suggestions,
         )
 
         if inline_comments:
@@ -508,126 +506,17 @@ def _build_inline_comments(
     return comments
 
 
-MAX_SUGGESTIONS_IN_SUMMARY = 15
-
-
-def _infer_code_lang(file_path: str) -> str:
-    """Infer code block language from file extension."""
-    ext_map = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".tsx": "tsx",
-        ".jsx": "jsx",
-        ".java": "java",
-        ".go": "go",
-        ".rb": "ruby",
-        ".cpp": "cpp",
-        ".c": "c",
-        ".h": "c",
-        ".cs": "csharp",
-        ".php": "php",
-        ".sql": "sql",
-        ".yaml": "yaml",
-        ".yml": "yaml",
-        ".json": "json",
-        ".html": "html",
-        ".css": "css",
-        ".sh": "bash",
-    }
-    path_lower = file_path.lower()
-    for ext, lang in ext_map.items():
-        if path_lower.endswith(ext):
-            return lang
-    return ""
-
-
-def _build_suggestions_sections(inline_suggestions: list) -> str:
-    """Build File Suggestions and Code Suggestions markdown from inline suggestions.
-
-    Returns empty string if inline_suggestions is empty. Caps at
-    MAX_SUGGESTIONS_IN_SUMMARY to avoid an excessively long summary.
-    """
-    if not inline_suggestions:
-        return ""
-
-    # Filter valid suggestions (same criteria as _build_inline_comments)
-    valid = []
-    for s in inline_suggestions:
-        fp = getattr(s, "file_path", None) or ""
-        line = getattr(s, "line", None)
-        if fp and line and line >= 1:
-            valid.append(s)
-
-    if not valid:
-        return ""
-
-    # Cap number of suggestions
-    to_show = valid[:MAX_SUGGESTIONS_IN_SUMMARY]
-    truncated = len(valid) > MAX_SUGGESTIONS_IN_SUMMARY
-
-    # File Suggestions: group by file_path
-    file_counts = Counter(getattr(s, "file_path", "") or "" for s in to_show)
-    file_counts.pop("", None)
-
-    file_section_lines = ["## 📁 Files with Suggested Changes\n"]
-    for path, count in sorted(file_counts.items()):
-        file_section_lines.append(f"- `{path}` ({count} suggestion{'s' if count != 1 else ''})")
-
-    # Code Suggestions: one block per suggestion
-    code_section_lines = ["\n## 💡 Code Suggestions\n"]
-    for i, s in enumerate(to_show, 1):
-        fp = getattr(s, "file_path", None) or ""
-        line = getattr(s, "line", None)
-        end_line = getattr(s, "end_line", None)
-        message = getattr(s, "message", None) or ""
-        suggested_code = getattr(s, "suggested_code", None)
-
-        line_str = f"{end_line}-{line}" if (end_line is not None and int(end_line) < int(line)) else str(line)
-        code_section_lines.append(f"### File: `{fp}`, Line: {line_str}")
-        code_section_lines.append(f"**Problem:** {message}")
-
-        if suggested_code is not None:
-            lang = _infer_code_lang(fp)
-            lang_attr = lang if lang else ""
-            code_section_lines.append("**Suggested Fix:**")
-            code_section_lines.append(f"```{lang_attr}")
-            code_section_lines.append(suggested_code)
-            code_section_lines.append("```")
-        else:
-            code_section_lines.append("**Suggested Fix:** No concrete fix suggested.")
-
-        code_section_lines.append("")
-
-    if truncated:
-        code_section_lines.append(
-            f"*... and {len(valid) - MAX_SUGGESTIONS_IN_SUMMARY} more suggestion(s). "
-            "See inline comments on the diff for details.*\n"
-        )
-
-    return "\n".join(file_section_lines) + "\n".join(code_section_lines)
-
-
-def format_review_summary(
-    review_text: str,
-    quality_gate_text: str,
-    issue_count: int,
-    pr_info: dict,
-    decision: ReviewDecision,
-    inline_suggestions: Optional[list] = None,
-) -> str:
-    """Format the final review summary with decision reasoning.
-
-    When inline_suggestions is provided and non-empty, adds File Suggestions
-    and Code Suggestions sections between the review text and Review Decision.
-    """
-    suggestions_md = _build_suggestions_sections(inline_suggestions or [])
-    suggestions_block = f"\n{suggestions_md}\n\n---\n\n" if suggestions_md else ""
-
+def format_review_summary(review_text: str, quality_gate_text: str,
+                         issue_count: int, pr_info: dict,
+                         decision: ReviewDecision) -> str:
+    """Format the final review summary with decision reasoning"""
     summary = f"""# 🤖 AI Code Review
 
 {review_text}
-{suggestions_block}## 🎯 Review Decision
+
+---
+
+## 🎯 Review Decision
 
 **Action:** {decision.event_type}  
 **Confidence:** {decision.confidence:.0%}  
