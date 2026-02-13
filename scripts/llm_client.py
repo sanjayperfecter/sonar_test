@@ -572,23 +572,23 @@ Use the full file content to write a comprehensive overview (3-8 sentences). Inc
 
 ## Example output structure
 
-{
+{{
   "summary": "This file contains 6 critical issues: 3 SQL injections (lines 17, 23, 36-38), XSS vulnerability (line 46), hardcoded credentials (lines 51-53), and missing error handling throughout. Lines 36-38 and 51-53 are not in the current diff but contain serious vulnerabilities that should be addressed.",
   "inline_suggestions": [
-    {
+    {{
       "file_path": "src/app.py",
       "line": 17,
       "message": "SQL injection: user input is interpolated directly into the query string. Use parameterized queries.",
       "suggested_code": "query = \\"SELECT * FROM users WHERE id = %s\\""
-    },
-    {
+    }},
+    {{
       "file_path": "src/app.py",
       "line": 23,
       "message": "SQL injection via string formatting AND plaintext password storage. Use parameterized queries and hash passwords with bcrypt.",
       "suggested_code": null
-    }
+    }}
   ]
-}
+}}
 
 CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no explanations.
 """
