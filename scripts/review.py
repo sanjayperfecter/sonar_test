@@ -457,7 +457,8 @@ def _build_inline_comments(
 
     Each returned dict has the keys expected by
     ``GitHubClient.post_review_with_comments``: ``path``, ``line``,
-    ``side``, and ``body``.
+    ``side``, and ``body``.  Supports multi-line suggestions via
+    ``start_line`` when the suggestion's ``end_line`` is set.
 
     Suggestions without a valid ``line`` or ``file_path`` are silently
     skipped. The list is capped at ``MAX_INLINE_COMMENTS``.
@@ -467,6 +468,7 @@ def _build_inline_comments(
     for suggestion in inline_suggestions:
         file_path = getattr(suggestion, "file_path", None) or ""
         line = getattr(suggestion, "line", None)
+        end_line = getattr(suggestion, "end_line", None)
         message = getattr(suggestion, "message", None) or ""
         suggested_code = getattr(suggestion, "suggested_code", None)
 
@@ -474,19 +476,29 @@ def _build_inline_comments(
         if not file_path or not line or line < 1:
             continue
 
-        # Build the comment body
-        if suggested_code:
+        # Build the comment body.
+        # Use ``is not None`` so that an empty string "" (meaning
+        # "delete this line") still produces a GitHub suggestion block.
+        if suggested_code is not None:
             # Use GitHub's suggestion block for one-click apply
             body = f"{message}\n\n```suggestion\n{suggested_code}\n```"
         else:
             body = message
 
-        comments.append({
+        comment = {
             "path": file_path,
             "line": int(line),
             "side": "RIGHT",
             "body": body,
-        })
+        }
+
+        # Multi-line suggestion: end_line is the START of the range,
+        # line is the END.  GitHub expects start_line < line.
+        if end_line is not None and int(end_line) < int(line):
+            comment["start_line"] = int(end_line)
+            comment["start_side"] = "RIGHT"
+
+        comments.append(comment)
 
         if len(comments) >= MAX_INLINE_COMMENTS:
             break
