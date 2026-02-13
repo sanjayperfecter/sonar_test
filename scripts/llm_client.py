@@ -249,9 +249,10 @@ class LLMClient:
                     deployment_name=self.azure_deployment,
                     temperature=temperature,
                     max_tokens=max_tokens_structured,
+                    model_kwargs={"response_format": {"type": "json_object"}},
                 )
                 print(f"✅ Azure OpenAI LangChain structured model initialized "
-                      f"(max_tokens={max_tokens_structured})")
+                      f"(max_tokens={max_tokens_structured}, JSON mode enabled)")
 
                 # Build the reusable LangChain review chains
                 self._init_review_chain()
@@ -425,9 +426,77 @@ IMPORTANT: Inline suggestions are ONLY for issues in the diff. The summary cover
             ]
         )
 
+        # Create chain with custom output parser that handles JSON extraction
+        from langchain_core.output_parsers import StrOutputParser
+        
         self.structured_review_chain = (
-            self.structured_review_prompt | llm_for_structured | self.structured_parser
+            self.structured_review_prompt 
+            | llm_for_structured 
+            | StrOutputParser()
+            | self._extract_and_parse_json
         )
+
+    def _extract_and_parse_json(self, text: str) -> ReviewWithSuggestions:
+        """Extract JSON from LLM response and parse it into ReviewWithSuggestions.
+        
+        Handles cases where:
+        - JSON is wrapped in markdown code blocks (```json ... ```)
+        - Extra text appears before or after the JSON
+        - Response contains explanations alongside JSON
+        """
+        import json
+        import re
+        
+        # Try to extract JSON from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            # Try to find raw JSON object
+            json_match = re.search(r'\{.*"summary".*"inline_suggestions".*\}', text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+            else:
+                # If no JSON found, try the entire text
+                json_str = text.strip()
+        
+        try:
+            # Parse the JSON
+            data = json.loads(json_str)
+            
+            # Validate and construct ReviewWithSuggestions
+            summary = data.get("summary", "")
+            inline_suggestions_data = data.get("inline_suggestions", [])
+            
+            # Parse inline suggestions
+            inline_suggestions = []
+            for suggestion_data in inline_suggestions_data:
+                try:
+                    suggestion = InlineSuggestion(
+                        file_path=suggestion_data.get("file_path", ""),
+                        line=int(suggestion_data.get("line", 0)),
+                        message=suggestion_data.get("message", ""),
+                        suggested_code=suggestion_data.get("suggested_code")
+                    )
+                    inline_suggestions.append(suggestion)
+                except Exception as e:
+                    print(f"⚠️  Failed to parse inline suggestion: {e}")
+                    print(f"    Suggestion data: {suggestion_data}")
+                    continue
+            
+            return ReviewWithSuggestions(
+                summary=summary,
+                inline_suggestions=inline_suggestions
+            )
+            
+        except json.JSONDecodeError as e:
+            print(f"⚠️  Failed to parse JSON from LLM response: {e}")
+            print(f"    Attempted to parse: {json_str[:500]}...")
+            # Return empty response instead of failing
+            return ReviewWithSuggestions(
+                summary="Failed to parse structured review response.",
+                inline_suggestions=[]
+            )
 
     def _build_structured_system_prompt(self) -> str:
         """Build the system prompt used by the structured review chain."""
@@ -467,42 +536,42 @@ Your job is to scan the diff for issues to create inline suggestions, and use th
 
 ## Output Format
 
-You MUST return valid JSON matching the provided schema. The JSON has two fields:
+You MUST return ONLY a valid JSON object. Do NOT include any markdown code blocks, explanations, or text outside the JSON. The response must be parseable by json.loads().
 
-### 1. ``inline_suggestions`` (MOST IMPORTANT -- based on DIFF ONLY)
+The JSON must have exactly two fields:
+
+### 1. ``inline_suggestions`` (array) - MOST IMPORTANT
 
 Scan the annotated diff for issues. Create one entry for EVERY issue you find in the diff. Do NOT skip issues. Do NOT combine multiple issues into one entry. Each issue gets its own entry.
 
-Only analyze and create suggestions for issues found in the annotated diff lines. Do NOT create inline suggestions for code that is only visible in the full file content.
+Only analyze and create suggestions for issues found in the annotated diff lines (those with ``# L`` markers). Do NOT create inline suggestions for code that is only visible in the full file content.
 
-For each entry provide:
-- ``file_path``: the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
-- ``line``: the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
-- ``message``: clear explanation of what is wrong, why it matters, and how to fix it
-- ``suggested_code``: the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, set to null.
+For each entry in the array, provide:
+- ``file_path`` (string): the exact relative path from the diff ``File:`` header or ``+++`` header (e.g. ``src/app.py``)
+- ``line`` (number): the line number from the ``# L<number>`` annotation in the DIFF section. Use the EXACT number shown after ``# L``.
+- ``message`` (string): clear explanation of what is wrong, why it matters, and how to fix it
+- ``suggested_code`` (string or null): the corrected replacement code for that line. Only the replacement content for that single line, no diff markers or line numbers. If you cannot provide a concrete fix, use null.
 
-Rules:
-- ONLY use line numbers from ``# L`` markers in the annotated diff section.
-- ONLY create suggestions for issues found in the diff lines.
-- Use the exact ``file_path`` as shown in the diff header.
-- Do NOT invent line numbers. Only use numbers from ``# L`` markers.
-- Create a SEPARATE suggestion for EACH problematic line, even if they share the same category (e.g. multiple SQL injections on different lines each get their own entry).
-- Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity.
+Rules for inline_suggestions:
+- ONLY use line numbers from ``# L`` markers in the annotated diff section
+- ONLY create suggestions for issues found in the diff lines
+- Use the exact ``file_path`` as shown in the diff header
+- Do NOT invent line numbers. Only use numbers from ``# L`` markers
+- Create a SEPARATE suggestion for EACH problematic line
+- Maximum 25 suggestions. If more than 25 issues exist, prioritize by severity
+- If NO issues are found in the diff, return an empty array: []
 
-### 2. ``summary`` (based on FULL FILE CONTENT)
+### 2. ``summary`` (string)
 
 Use the full file content to write a comprehensive overview (3-8 sentences). Include:
-- Overall assessment of the entire file (e.g. "This file has N critical security issues.")
+- Overall assessment of the entire file
 - ALL issues found anywhere in the file, including those on lines NOT in the diff
 - For issues outside the diff, briefly describe them here since they cannot have inline comments
 - Counts of issues by category
 - Recommendation
 
-The ``summary`` is the place to report issues from the entire file. Issues that are only in the full file content (not in the diff) should be described here.
-
 ## Example output structure
 
-```json
 {
   "summary": "This file contains 6 critical issues: 3 SQL injections (lines 17, 23, 36-38), XSS vulnerability (line 46), hardcoded credentials (lines 51-53), and missing error handling throughout. Lines 36-38 and 51-53 are not in the current diff but contain serious vulnerabilities that should be addressed.",
   "inline_suggestions": [
@@ -520,7 +589,8 @@ The ``summary`` is the place to report issues from the entire file. Issues that 
     }
   ]
 }
-```
+
+CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no explanations.
 """
 
     def get_azure_langchain_model(self) -> Optional[AzureChatOpenAI]:
