@@ -158,7 +158,7 @@ SonarClient
 ```python
 LLMClient
   ├─ review_with_claude() → Claude Sonnet 4.5
-  ├─ review_with_azure_openai() → GPT-4
+  ├─ review_with_azure_openai() → GPT-4.1.mini(GPT4.1)
   ├─ review_code() → Main entry with fallback
   ├─ _build_system_prompt() → Expert reviewer persona
   └─ _build_user_prompt() → Context assembly
@@ -259,7 +259,7 @@ review.py starts
        ↓
 8. Post to GitHub
    ├─ Summary review
-   ├─ Inline comments (optional)
+   ├─ Inline comments
    └─ Status check
        ↓
 Review complete
