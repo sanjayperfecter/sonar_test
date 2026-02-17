@@ -210,6 +210,56 @@ Expected AI review should identify:
 
 ### 6. Customize Configuration
 
+## Advanced AI Review Features (Enabled by Default)
+
+The AI reviewer now includes enhanced intelligence features:
+
+### Severity Classification
+
+Each suggestion is labeled as:
+
+- CRITICAL
+- MAJOR
+- MINOR
+- STYLE
+- REFACTOR
+
+Displayed directly in inline PR comments.
+
+### Confidence Filtering
+
+Low-confidence suggestions are automatically removed to avoid noise.
+
+Default threshold: 0.65
+
+### Duplicate Suggestion Suppression
+
+Prevents repeated feedback across similar lines or files.
+
+### Refactor Suggestions
+
+AI can now suggest structural improvements like:
+
+- Extract function
+- Reduce duplication
+- Simplify nested logic
+
+These may not always include code patches.
+
+### PR Risk Score
+
+Every PR now includes a risk assessment:
+
+Example:
+
+Risk Score: 6/10 (MEDIUM)
+
+Based on:
+- Size of changes
+- Sonar findings
+- Critical AI suggestions
+
+
 Edit `.github/ai-review-config.yaml` to customize:
 
 ```yaml

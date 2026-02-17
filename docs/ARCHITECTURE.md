@@ -118,6 +118,11 @@ main()
 - Error handling and retry logic
 - Decision making (approve/request changes/comment)
 - Status reporting
+- Confidence-based filtering of AI suggestions
+- Duplicate suggestion suppression
+- PR risk scoring
+- Severity tagging for inline issues
+- Refactor opportunity detection
 
 #### github_api.py (GitHub Client)
 ```python
@@ -158,10 +163,17 @@ SonarClient
 ```python
 LLMClient
   ├─ review_with_claude() → Claude Sonnet 4.5
-  ├─ review_with_azure_openai() → GPT-4
+  ├─ review_with_azure_openai() → GPT-4.1.mini(GPT4.1)
   ├─ review_code() → Main entry with fallback
   ├─ _build_system_prompt() → Expert reviewer persona
   └─ _build_user_prompt() → Context assembly
+  ├─ review_code_structured() → Structured JSON output
+  ├─ Severity classification (CRITICAL/MAJOR/MINOR/STYLE/REFACTOR)
+  ├─ Confidence scoring (0.0–1.0)
+  ├─ Inline suggestion generation
+  ├─ Refactor detection
+  ├─ Large PR chunking
+  └─ Natural-language suggestion sanitization
 ```
 
 **Key Features:**
@@ -259,13 +271,57 @@ review.py starts
        ↓
 8. Post to GitHub
    ├─ Summary review
-   ├─ Inline comments (optional)
+   ├─ Inline comments
    └─ Status check
        ↓
 Review complete
 ```
 
 ## Design Decisions
+## AI Review Intelligence Layer (New)
+
+The AI reviewer now includes a multi-stage intelligence pipeline:
+
+1) Diff + Full File Context
+2) SonarQube issue context
+3) Structured LLM analysis
+4) Post-processing layer:
+   - Confidence filtering
+   - Duplicate detection
+   - Severity tagging
+   - Refactor suggestion classification
+   - Risk scoring
+
+### Severity Levels
+
+Each suggestion is categorized as:
+
+- CRITICAL → Security / crash risks
+- MAJOR → Logic bugs / performance issues
+- MINOR → Code quality improvements
+- STYLE → Formatting / naming
+- REFACTOR → Structural improvements
+
+### Confidence Filtering
+
+Suggestions below confidence threshold (default: 0.65) are discarded to reduce noise.
+
+### Duplicate Suppression
+
+Similar suggestions are removed using semantic similarity comparison.
+
+### Risk Score Engine
+
+Each PR receives a risk score (0–10) based on:
+
+- Size of PR
+- Sonar issues
+- Critical suggestions
+- Code churn
+
+Displayed in review summary as:
+
+Risk Score: 7/10 (HIGH)
 
 ### Why GitHub Actions over GitHub App?
 
@@ -335,6 +391,8 @@ Review complete
 5. **Simpler permissions** - No write access needed
 
 **Trade-off:** Requires developer action to apply fixes
+
+
 
 ## Security Model
 
@@ -471,12 +529,6 @@ Implement parsing of AI response to extract line-specific issues and post with `
 - **SonarCloud:** Generous → Rare issue
 
 ## Future Enhancements
-
-### Planned
-- [ ] Inline comment generation from AI suggestions
-- [ ] Historical review quality tracking
-- [ ] Custom rule configuration per repository
-- [ ] Integration with Jira/Linear for issue linking
 
 ### Considered
 - [ ] Multi-language prompt optimization

@@ -399,11 +399,11 @@ def main():
         # Post review summary + inline comments
         print("\n📝 Posting review...")
         summary = format_review_summary(
-            review_result, 
-            quality_gate_text, 
+            review_result,
+            quality_gate_text,
             len(sonar_issues),
             pr_info,
-            decision
+            decision,
         )
 
         if inline_comments:
@@ -507,10 +507,9 @@ def _build_inline_comments(
 
 
 def format_review_summary(review_text: str, quality_gate_text: str,
-                         issue_count: int, pr_info: dict, 
+                         issue_count: int, pr_info: dict,
                          decision: ReviewDecision) -> str:
     """Format the final review summary with decision reasoning"""
-
     summary = f"""# 🤖 AI Code Review
 
 {review_text}
@@ -541,7 +540,7 @@ def format_review_summary(review_text: str, quality_gate_text: str,
 
 ---
 
-<sub>🤖 Automated review powered by Claude Sonnet 4.5 via Azure Foundry + LangChain | 
+<sub>🤖 Automated review powered by LLM via Azure Foundry + LangChain | 
 [Configure](.github/ai-review-config.yaml) | 
 [Documentation](docs/SETUP.md)</sub>
 """

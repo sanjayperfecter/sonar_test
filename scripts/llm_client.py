@@ -427,7 +427,7 @@ that appear in the diff.
 1. Scan the diff for issues to create inline suggestions. Use the full file content to write a comprehensive summary.
 2. Return your response as valid JSON matching the schema above.
    - ``inline_suggestions``: one entry for EVERY issue found in the annotated diff (has a ``# L`` marker). Use the exact ``# L`` number. Do NOT create inline suggestions for code that only appears in the full file content.
-   - ``summary``: report ALL issues found anywhere in the file (including lines NOT in the diff). Be concise (3-8 sentences).
+   - ``summary``: FULL markdown with Summary, Files with Suggested Changes, and Code Suggestions sections. Each inline_suggestion MUST appear in the Code Suggestions section with File, Line, Problem, and Suggested Fix (code block).
 3. If an issue exists in the file but its line does NOT appear in the diff, mention it in the ``summary`` only — do NOT create an inline_suggestion for it (GitHub cannot display it).
 4. ALWAYS provide ``suggested_code`` with valid source code (not natural language). Use ``""`` to delete lines. Use multi-line via ``end_line`` for consecutive problematic lines.
 
@@ -646,17 +646,31 @@ For each entry in the array, provide:
 
 ### 2. ``summary`` (string)
 
-Use the full file content to write a comprehensive overview (3-8 sentences). Include:
-- Overall assessment of the entire file
-- ALL issues found anywhere in the file, including those on lines NOT in the diff
-- For issues outside the diff, briefly describe them here since they cannot have inline comments
-- Counts of issues by category
-- Recommendation
+A FULL markdown document. Use this EXACT structure. Include ALL sections that apply:
+
+**### Summary**
+[2-4 sentence overall assessment. Mention issues found anywhere in the file, including lines NOT in the diff.]
+
+**### Files with Suggested Changes**
+[Bulleted list of files that have inline suggestions. Format: - `path` (N suggestion(s))]
+
+**### Code Suggestions**
+[For EACH entry in inline_suggestions, add a subsection:]
+**#### File: `path`, Line: N**
+**Problem:** [message from inline_suggestions]
+**Suggested Fix:**
+```[language]
+[suggested_code]
+```
+
+Limit to the first 15 suggestions in the Code Suggestions section to avoid token overflow. If more exist, add: *"... and N more. See inline comments on the diff."*
+
+Use the same file_path, line, message, and suggested_code values in the summary as in the inline_suggestions array. Keep them consistent.
 
 ## Example output structure
 
 {{
-  "summary": "This file has 3 issues in the diff: a debug print statement (lines 22-23), unreachable code due to bare return (line 24), and an existing SQL injection on line 45 outside the diff that should also be addressed.",
+  "summary": "### Summary\\n\\nThis file has 3 issues in the diff: a debug print statement (lines 22-23), unreachable code due to bare return (line 24), and an existing SQL injection on line 17. Address these before merge.\\n\\n### Files with Suggested Changes\\n\\n- `src/app.py` (3 suggestions)\\n\\n### Code Suggestions\\n\\n#### File: `src/app.py`, Line: 22-23\\n**Problem:** Debug print statement with excessive brackets and unclear content. Remove before production to avoid cluttering logs and leaking internal information.\\n**Suggested Fix:**\\n```\\n\\n```\\n\\n#### File: `src/app.py`, Line: 24\\n**Problem:** Bare return exits the function without returning the FastAPI app instance, causing create_app() to return None. This breaks application initialization.\\n**Suggested Fix:**\\n```python\\n    return app\\n```\\n\\n#### File: `src/app.py`, Line: 17\\n**Problem:** SQL injection: user input is interpolated directly into the query string. Use parameterized queries.\\n**Suggested Fix:**\\n```python\\n    query = \\"SELECT * FROM users WHERE id = %s\\"\\n```",
   "inline_suggestions": [
     {{
       "file_path": "src/app.py",
@@ -707,6 +721,50 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
             return 0
         # Typical English text averages ~3–4 chars per token.
         return max(1, len(text) // 4)
+
+    def _log_token_usage(
+        self,
+        label: str,
+        input_text: str,
+        output_text: str,
+        real_usage: Optional[Any] = None,
+    ) -> None:
+        """Log token usage. Uses real API usage when provided, else estimate."""
+        if real_usage is not None:
+            # Anthropic: input_tokens, output_tokens
+            # Azure: prompt_tokens, completion_tokens
+            # Support both dict and object with attributes
+            def _get(obj, *keys):
+                for k in keys:
+                    v = obj.get(k) if isinstance(obj, dict) else getattr(obj, k, None)
+                    if v is not None:
+                        return v
+                return 0
+
+            inp = _get(real_usage, "input_tokens", "prompt_tokens")
+            out = _get(real_usage, "output_tokens", "completion_tokens")
+            total = inp + out
+            print(f"  Token usage ({label}): input={inp}, output={out}, total={total}")
+        else:
+            inp = self._estimate_token_count(input_text)
+            out = self._estimate_token_count(output_text)
+            print(f"  Token usage ({label}, est): input={inp}, output={out}, total={inp + out}")
+
+    @staticmethod
+    def _usage_from_ai_message(msg) -> Optional[dict]:
+        """Extract token usage from LangChain AIMessage. Returns dict or None."""
+        if msg is None:
+            return None
+        # usage_metadata (LangChain standard)
+        um = getattr(msg, "usage_metadata", None)
+        if um and (um.get("input_tokens") or um.get("output_tokens")):
+            return um
+        # response_metadata.token_usage (OpenAI/Azure)
+        rm = getattr(msg, "response_metadata", None) or {}
+        tu = rm.get("token_usage") or rm.get("usage")
+        if tu:
+            return tu
+        return None
 
     def _split_unified_diff(self, diff: str) -> List[Dict[str, str]]:
         """
@@ -890,7 +948,14 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
             ]
         )
 
-        return response.content[0].text
+        output_text = response.content[0].text
+        self._log_token_usage(
+            "Claude",
+            system_prompt + user_content,
+            output_text,
+            getattr(response, "usage", None),
+        )
+        return output_text
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def review_with_azure_openai(self, system_prompt: str, user_content: str) -> str:
@@ -910,7 +975,14 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
             temperature=0.3
         )
 
-        return response.choices[0].message.content
+        output_text = response.choices[0].message.content
+        self._log_token_usage(
+            "Azure",
+            system_prompt + user_content,
+            output_text,
+            getattr(response, "usage", None),
+        )
+        return output_text
 
     def _aggregate_chunk_reviews(self, chunk_reviews: List[str], truncated: bool) -> str:
         """
@@ -1026,7 +1098,17 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
             "file_context": str(file_context or ""),
         }
 
-        return self.review_chain.invoke(variables)
+        # Invoke up to LLM to capture AIMessage (with usage)
+        ai_message = (self.review_prompt | self.azure_langchain).invoke(variables)
+        usage = self._usage_from_ai_message(ai_message)
+        result = StrOutputParser().invoke(ai_message)
+        input_text = (
+            str(variables.get("diff", ""))
+            + str(variables.get("sonar_context", ""))
+            + str(variables.get("file_context", ""))
+        )
+        self._log_token_usage("Azure LangChain", input_text, result, usage)
+        return result
 
     def _review_large_diff_with_azure_langchain(
         self,
@@ -1082,7 +1164,20 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
                     "file_context": str(file_context or ""),
                 }
 
-                review = self.review_chain.invoke(variables)
+                ai_message = (self.review_prompt | self.azure_langchain).invoke(variables)
+                usage = self._usage_from_ai_message(ai_message)
+                review = StrOutputParser().invoke(ai_message)
+                input_text = (
+                    str(variables.get("diff", ""))
+                    + str(variables.get("sonar_context", ""))
+                    + str(variables.get("file_context", ""))
+                )
+                self._log_token_usage(
+                    f"Azure LangChain chunk {chunk['chunk_index']}/{chunk['total_chunks']}",
+                    input_text,
+                    review,
+                    usage,
+                )
                 prefix = (
                     f"### File: {chunk['file_path']} "
                     f"(chunk {chunk['chunk_index']}/{chunk['total_chunks']})\n\n"
@@ -1328,7 +1423,20 @@ CRITICAL: Return ONLY the JSON object above. No code blocks, no markdown, no exp
             "format_instructions": str(self.structured_parser.get_format_instructions()),
         }
 
-        return self.structured_review_chain.invoke(variables)
+        # Invoke up to LLM to capture AIMessage (with usage)
+        llm_for_structured = self.azure_langchain_structured or self.azure_langchain
+        ai_message = (self.structured_review_prompt | llm_for_structured).invoke(variables)
+        usage = self._usage_from_ai_message(ai_message)
+        raw_text = StrOutputParser().invoke(ai_message)
+        result = self._extract_and_parse_json(raw_text)
+        input_text = (
+            str(annotated_diff)
+            + str(sonar_context or "")
+            + str(file_context or "")
+        )
+        output_text = result.summary if hasattr(result, "summary") else str(result)
+        self._log_token_usage("Structured review", input_text, output_text, usage)
+        return result
 
     def _build_system_prompt(self) -> str:
         """Build system prompt for code review"""
